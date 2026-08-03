@@ -675,6 +675,14 @@ wait_for_new_files() {
     fi
 }
 
+wait_for_new_files_briefly() {
+    if command -v inotifywait >/dev/null 2>&1; then
+        inotifywait -qq -t 1 -r -e close_write -e moved_to --exclude '/finished(/|$)' "$SOURCE_DIR" || true
+    else
+        sleep 1
+    fi
+}
+
 run_batch_once() {
     local files=()
     if [ "$FINAL_WATCH_MODE" -ne 1 ]; then
@@ -720,11 +728,13 @@ run_batch_once() {
         local running_workers=0
         local work_started=0
         local total_label="queue"
+        local started_in_pass=0
         declare -A seen_paths=()
 
         admin_write_status "watching" "Watching for queued files" "$total_label" 0 0 0
 
         while true; do
+            started_in_pass=0
             if [ -n "$renderer_pid" ]; then
                 running_workers=$(jobs -rp | awk -v rp="$renderer_pid" '$1 != rp' | wc -l)
             else
@@ -746,6 +756,7 @@ run_batch_once() {
                 ((current_index++))
                 seen_paths["$next_file"]=1
                 work_started=1
+                started_in_pass=1
                 admin_write_status "running" "Processing queued files" "$total_label" 0 "$count_success" "$count_failed"
 
                 if [ "$FINAL_PARALLEL_JOBS" -le 1 ]; then
@@ -766,6 +777,11 @@ run_batch_once() {
 
             if [ "$running_workers" -eq 0 ]; then
                 break
+            fi
+
+            if [ "$running_workers" -lt "$FINAL_PARALLEL_JOBS" ] && [ "$started_in_pass" -eq 0 ]; then
+                wait_for_new_files_briefly
+                continue
             fi
 
             wait -n
