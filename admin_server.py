@@ -16,7 +16,25 @@ PROGRESS_DIR = STATE_DIR / "progress"
 IMPORT_DIR = Path("/import")
 FINISHED_DIR = IMPORT_DIR / "finished"
 MEDIA_EXTENSIONS = {".mkv", ".mp4", ".ts", ".m2ts", ".avi", ".mov", ".wmv"}
-PORT = int(os.environ.get("ADMIN_PORT", "8080"))
+
+
+def get_admin_port() -> int:
+    raw_value = os.environ.get("ADMIN_PORT", "8080").strip()
+    if not raw_value:
+        return 8080
+
+    try:
+        port = int(raw_value)
+    except ValueError:
+        return 8080
+
+    if port < 1 or port > 65535:
+        return 8080
+
+    return port
+
+
+PORT = get_admin_port()
 
 
 def natural_sort_key(value: str):
