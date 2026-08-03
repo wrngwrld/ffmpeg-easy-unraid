@@ -7,9 +7,19 @@
 shopt -s nullglob
 
 
-echo "[INIT] VAAPI devices:"
-vainfo 2>&1 | grep -E "VAProfile|VAEntrypoint" || true
-
+cat <<EOF
+${cmd_prefix[@]} \
+-init_hw_device vaapi=va:/dev/dri/renderD128 \
+-filter_hw_device va \
+-vaapi_device /dev/dri/renderD128 \
+-i "$input" \
+-map 0 \
+-vf "format=nv12,hwupload" \
+-c:v hevc_vaapi \
+-qp $QP_VALUE \
+$audio_sub_args \
+"$output"
+EOF
 
 # --- GLOBAL VARS ---
 METHOD="${ENCODE_METHOD:-cpu_h265}"
@@ -27,6 +37,7 @@ LOG_FILE="$EXPORT_DIR/history.log"
 
 CRF_VALUE=""
 CQ_VALUE=""
+QP_VALUE=""
 PRESET=""
 FINAL_THREADS=0
 START_TIME=$SECONDS
@@ -49,6 +60,8 @@ configure_settings() {
         CRF_VALUE="${ENCODE_CRF:-18}"
         CQ_VALUE="${ENCODE_CQ:-19}"
     fi
+
+    QP_VALUE="${ENCODE_QP:-22}"
 
     # B) Smart Defaults: Preset
     if [ "$PRESET_INPUT" == "default" ]; then
@@ -116,7 +129,17 @@ check_hardware() {
     # FIX: Increased test resolution from 64x64 to 128x128
     case "$METHOD" in
         "nvidia_"*) test_cmd="ffmpeg -y -f lavfi -i color=c=black:s=128x128 -vframes 1 -c:v hevc_nvenc -f null -" ;;
-        "intel_"*) test_cmd="ffmpeg -y -vaapi_device /dev/dri/renderD128 -f lavfi -i color=c=black:s=128x128,format=nv12,hwupload -frames:v 1 -c:v hevc_vaapi -f null -" ;;        
+        "intel_"*) test_cmd="ffmpeg -y \
+        -init_hw_device vaapi=va:/dev/dri/renderD128 \
+        -filter_hw_device va \
+        -vaapi_device /dev/dri/renderD128 \
+        -f lavfi \
+        -i color=c=black:s=128x128 \
+        -vf 'format=nv12,hwupload' \
+        -frames:v 1 \
+        -c:v hevc_vaapi \
+        -qp 22 \
+        -f null -" ;;      
         *)          test_cmd="true" ;;
     esac
 
@@ -147,8 +170,25 @@ get_ffmpeg_cmd() {
     case "$METHOD" in
         "nvidia_av1")  echo "${cmd_prefix[@]} -hwaccel cuda -hwaccel_output_format cuda -i \"$input\" -map 0 -c:v av1_nvenc -cq $CQ_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
         "nvidia_h265") echo "${cmd_prefix[@]} -hwaccel cuda -hwaccel_output_format cuda -i \"$input\" -map 0 -c:v hevc_nvenc -cq $CQ_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
-        "intel_av1")   echo "${cmd_prefix[@]} -hwaccel vaapi -hwaccel_output_format vaapi -vaapi_device /dev/dri/renderD128 -i \"$input\" -map 0 -c:v av1_qsv -global_quality $CRF_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
-        "intel_h265")  echo "${cmd_prefix[@]} -hwaccel vaapi -hwaccel_output_format vaapi -vaapi_device /dev/dri/renderD128 -i \"$input\" -map 0 -c:v hevc_vaapi -vf 'format=nv12,hwupload' -qp $CRF_VALUE $audio_sub_args \"$output\"" ;;        
+        "intel_av1")
+        echo "[FATAL] Intel AV1 encoding not supported by this GPU."
+        return 1
+        ;;
+        "intel_h265")
+        cat <<EOF
+        ${cmd_prefix[@]} \
+        -init_hw_device vaapi=va:/dev/dri/renderD128 \
+        -filter_hw_device va \
+        -vaapi_device /dev/dri/renderD128 \
+        -i "$input" \
+        -map 0 \
+        -vf "format=nv12,hwupload" \
+        -c:v hevc_vaapi \
+        -qp $QP_VALUE \
+        $audio_sub_args \
+        "$output"
+        EOF
+        ;;
         "cpu_av1")     echo "${cmd_prefix[@]} -i \"$input\" $generic_thread_arg -map 0 -c:v libsvtav1 -crf $CRF_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
         *)             echo "${cmd_prefix[@]} -i \"$input\" $x265_safe_arg -map 0 -c:v libx265 -crf $CRF_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
     esac
