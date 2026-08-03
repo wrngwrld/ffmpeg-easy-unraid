@@ -128,6 +128,55 @@ ENCODE_PARALLEL_JOBS=2
 
 This approximates your HandBrake behavior (first video + first audio, AAC stereo, no subtitles). HDR sources remain HDR with the script's HDR-preservation logic.
 
+### Recommended Profiles (i5-13400)
+
+Use one of these ready-made profiles as a starting point.
+
+#### Profile A: Fast + Safe (mixed library, recommended)
+
+```text
+ENCODE_METHOD=intel_h265
+ENCODE_PRESET=default
+ENCODE_QP=22
+ENCODE_PARALLEL_JOBS=2
+ENCODE_MAP_ARGS=-map 0:v:0 -map 0:a:0
+FFMPEG_CUSTOM_ARGS=-c:a aac -b:a 160k -ac 2 -sn
+```
+
+Best default for your CPU/iGPU combo. Good speed, good size reduction, stable for most 1080p and many 4K jobs.
+
+#### Profile B: 4K HDR Stability (larger files, fewer surprises)
+
+```text
+ENCODE_METHOD=intel_h265
+ENCODE_PRESET=default
+ENCODE_QP=20
+ENCODE_PARALLEL_JOBS=2
+ENCODE_MAP_ARGS=-map 0:v:0 -map 0:a:0
+FFMPEG_CUSTOM_ARGS=-c:a copy -sn
+```
+
+Use this if your source is mostly 4K HDR and you want to keep quality more conservatively.
+
+#### Profile C: Maximum Shrink (slower and lower quality)
+
+```text
+ENCODE_METHOD=intel_h265
+ENCODE_PRESET=default
+ENCODE_QP=24
+ENCODE_PARALLEL_JOBS=3
+ENCODE_MAP_ARGS=-map 0:v:0 -map 0:a:0
+FFMPEG_CUSTOM_ARGS=-c:a aac -b:a 128k -ac 2 -sn
+```
+
+Use this only if your main goal is smallest size. If quality drops too much, go back to Profile A.
+
+Quick tuning rule:
+
+- Smaller files: raise QP by +1
+- Better quality: lower QP by -1
+- If you see instability or slowdowns with 3 jobs, set ENCODE_PARALLEL_JOBS back to 2
+
 ---
 
 ## 📂 Folder Structure (Mappings)
