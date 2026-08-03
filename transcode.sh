@@ -299,6 +299,7 @@ process_one_file() {
     local index="$2"
     local total="$3"
     local result_file="$4"
+    local progress_status_file="$5"
 
     local rel_path="${input_file#$SOURCE_DIR/}"
     local fname_no_ext
@@ -308,6 +309,10 @@ process_one_file() {
 
     local out_file="$EXPORT_DIR/$rel_dir/$fname_no_ext.mkv"
     local finish_dest="$FINISHED_DIR/$rel_path"
+    local short_name="$fname_no_ext"
+    if [ ${#short_name} -gt 48 ]; then
+        short_name="${short_name:0:45}..."
+    fi
 
     echo ""
     echo "[PROGRESS] File $index of $total"
@@ -320,6 +325,9 @@ process_one_file() {
     if ! wait_for_file_stable "$input_file"; then
         echo "[FAIL] Source became unavailable while waiting for stable copy: $rel_path"
         printf 'FAIL|0|0|%s\n' "$rel_path" > "$result_file"
+        if [ -n "$progress_status_file" ]; then
+            printf 'state=fail|index=%s|name=%s|pct=0.00|speed=n/a|elapsed=0|out=0\n' "$index" "$short_name" > "$progress_status_file"
+        fi
         return
     fi
 
@@ -357,6 +365,9 @@ process_one_file() {
     local ff_progress_log=""
     local can_inline_progress=0
     local can_use_color=0
+    if [ -n "$progress_status_file" ]; then
+        printf 'state=run|index=%s|name=%s|pct=0.00|speed=n/a|elapsed=0|out=0\n' "$index" "$short_name" > "$progress_status_file"
+    fi
     if [ "$FINAL_LIVE_PREVIEW" -eq 1 ]; then
         echo "${log_tag}Starting ffmpeg encode..."
         local encode_start=$SECONDS
@@ -398,6 +409,7 @@ process_one_file() {
                     out_time_ms=$(awk -F= '/^out_time_ms=/{v=$2} END{print v+0}' "$ff_progress_log" 2>/dev/null)
                     speed_display=$(awk -F= '/^speed=/{v=$2} END{print v}' "$ff_progress_log" 2>/dev/null)
                     [ -z "$speed_display" ] && speed_display="n/a"
+                    speed_display=$(echo "$speed_display" | xargs)
 
                     if [ -n "$src_duration" ] && [[ "$out_time_ms" =~ ^[0-9]+$ ]] && [ "$out_time_ms" -ge 0 ]; then
                         pct_display=$(awk -v ms="$out_time_ms" -v d="$src_duration" 'BEGIN {
@@ -429,7 +441,9 @@ process_one_file() {
                 fi
 
                 local progress_line="${log_tag}${decorated_bar} ${decorated_pct} | speed ${speed_display} | t=${elapsed}s | out $(format_bytes_dual "$current_out_live_size")"
-                if [ "$can_inline_progress" -eq 1 ]; then
+                if [ -n "$progress_status_file" ]; then
+                    printf 'state=run|index=%s|name=%s|pct=%s|speed=%s|elapsed=%s|out=%s\n' "$index" "$short_name" "$pct_display" "$speed_display" "$elapsed" "$current_out_live_size" > "$progress_status_file"
+                elif [ "$can_inline_progress" -eq 1 ]; then
                     printf '\r\033[2K%s' "$progress_line"
                 else
                     echo "$progress_line"
@@ -481,6 +495,9 @@ process_one_file() {
 
         echo "[DONE] Encoding success."
         echo "${log_tag}File stats: input=$file_in_txt | output=$file_out_txt | saved=$file_saved_txt (${file_saved_pct}%)"
+        if [ -n "$progress_status_file" ]; then
+            printf 'state=done|index=%s|name=%s|pct=100.00|speed=done|elapsed=0|out=%s\n' "$index" "$short_name" "$current_out_size" > "$progress_status_file"
+        fi
         echo "DONE: $rel_path" >> "$LOG_FILE"
         chown "$TARGET_UID":"$TARGET_GID" "$out_file"
         chmod 666 "$out_file"
@@ -494,6 +511,9 @@ process_one_file() {
     else
         echo "[FAIL] Error processing $rel_path"
         [ -f "$out_file" ] && rm "$out_file"
+        if [ -n "$progress_status_file" ]; then
+            printf 'state=fail|index=%s|name=%s|pct=0.00|speed=fail|elapsed=0|out=0\n' "$index" "$short_name" > "$progress_status_file"
+        fi
         printf 'FAIL|%s|0|%s\n' "$current_in_size" "$rel_path" > "$result_file"
     fi
 }
@@ -547,6 +567,73 @@ repeat_char() {
     done
 
     echo "$out"
+}
+
+render_parallel_dashboard() {
+    local progress_dir="$1"
+    local stop_file="$2"
+    local previous_lines=0
+
+    while true; do
+        local display_lines=()
+        local status_files=("$progress_dir"/*.status)
+
+        if [ -e "${status_files[0]}" ]; then
+            local status_file
+            for status_file in $(ls "$progress_dir"/*.status 2>/dev/null | sort -V); do
+                local line
+                line=$(cat "$status_file" 2>/dev/null)
+                [ -z "$line" ] && continue
+
+                local state="" idx="" name="" pct="0.00" speed="n/a" elapsed="0" out_bytes="0"
+                local part
+                IFS='|' read -r -a fields <<< "$line"
+                for part in "${fields[@]}"; do
+                    case "$part" in
+                        state=*) state="${part#state=}" ;;
+                        index=*) idx="${part#index=}" ;;
+                        name=*) name="${part#name=}" ;;
+                        pct=*) pct="${part#pct=}" ;;
+                        speed=*) speed="${part#speed=}" ;;
+                        elapsed=*) elapsed="${part#elapsed=}" ;;
+                        out=*) out_bytes="${part#out=}" ;;
+                    esac
+                done
+
+                local bar
+                bar=$(render_progress_bar "$pct" 24)
+                local status_tag="RUN"
+                [ "$state" = "done" ] && status_tag="DONE"
+                [ "$state" = "fail" ] && status_tag="FAIL"
+                local out_txt
+                out_txt=$(format_bytes_dual "$out_bytes")
+                display_lines+=("[${status_tag}] [${bar}] ${pct}% | ${name} | speed ${speed} | t=${elapsed}s | out ${out_txt}")
+            done
+        fi
+
+        if [ "$previous_lines" -gt 0 ]; then
+            printf '\033[%sA' "$previous_lines"
+        fi
+
+        local printed=0
+        local dline
+        for dline in "${display_lines[@]}"; do
+            printf '\033[2K\r%s\n' "$dline"
+            ((printed++))
+        done
+        while [ "$printed" -lt "$previous_lines" ]; do
+            printf '\033[2K\r\n'
+            ((printed++))
+        done
+
+        previous_lines=${#display_lines[@]}
+
+        if [ -f "$stop_file" ]; then
+            break
+        fi
+
+        sleep 1
+    done
 }
 
 wait_for_file_stable() {
@@ -631,13 +718,25 @@ run_batch_once() {
     local result_dir
     local batch_start=$SECONDS
     result_dir=$(mktemp -d /tmp/ffmpeg-easy-results.XXXXXX)
+    local progress_dir="$result_dir/progress"
+    local progress_stop_file="$result_dir/progress.stop"
+    local renderer_pid=""
+
+    mkdir -p "$progress_dir"
+
+    if [ "$FINAL_PARALLEL_JOBS" -gt 1 ] && [ "$FINAL_LIVE_PREVIEW" -eq 1 ] && [ -t 1 ]; then
+        echo "[INFO] Parallel dashboard enabled (${FINAL_PARALLEL_JOBS} jobs)."
+        render_parallel_dashboard "$progress_dir" "$progress_stop_file" &
+        renderer_pid=$!
+    fi
 
     for input_file in "${files[@]}"; do
         ((current_index++))
         if [ "$FINAL_PARALLEL_JOBS" -le 1 ]; then
             process_one_file "$input_file" "$current_index" "$total_files" "$result_dir/$current_index.result"
         else
-            process_one_file "$input_file" "$current_index" "$total_files" "$result_dir/$current_index.result" &
+            local progress_status_file="$progress_dir/$current_index.status"
+            process_one_file "$input_file" "$current_index" "$total_files" "$result_dir/$current_index.result" "$progress_status_file" &
             while [ "$(jobs -rp | wc -l)" -ge "$FINAL_PARALLEL_JOBS" ]; do
                 wait -n
             done
@@ -646,6 +745,11 @@ run_batch_once() {
 
     if [ "$FINAL_PARALLEL_JOBS" -gt 1 ]; then
         wait
+    fi
+
+    if [ -n "$renderer_pid" ]; then
+        touch "$progress_stop_file"
+        wait "$renderer_pid" 2>/dev/null || true
     fi
 
     for result in "$result_dir"/*.result; do
