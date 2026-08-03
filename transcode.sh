@@ -667,8 +667,8 @@ wait_for_new_files() {
     admin_write_status "watching" "Waiting for new files" "queue" 0 0 0
     if command -v inotifywait >/dev/null 2>&1; then
         echo "[WATCH] Waiting for new files in '$SOURCE_DIR' (inotify)..."
-        # Trigger only when a write is closed or a fully written file is moved into place.
-        inotifywait -qq -r -e close_write -e moved_to --exclude '/finished(/|$)' "$SOURCE_DIR" || true
+        # Wake on new folders too so the next pass can attach watches inside them.
+        inotifywait -qq -r -e create -e close_write -e moved_to --exclude '/finished(/|$)' "$SOURCE_DIR" || true
     else
         echo "[WATCH] inotifywait not found. Polling every $FINAL_WATCH_POLL_SECONDS seconds..."
         sleep "$FINAL_WATCH_POLL_SECONDS"
@@ -677,7 +677,7 @@ wait_for_new_files() {
 
 wait_for_new_files_briefly() {
     if command -v inotifywait >/dev/null 2>&1; then
-        inotifywait -qq -t 1 -r -e close_write -e moved_to --exclude '/finished(/|$)' "$SOURCE_DIR" || true
+        inotifywait -qq -t 1 -r -e create -e close_write -e moved_to --exclude '/finished(/|$)' "$SOURCE_DIR" || true
     else
         sleep 1
     fi
