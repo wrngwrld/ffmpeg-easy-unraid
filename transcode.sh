@@ -560,7 +560,10 @@ scan_files() {
         files+=("$file")
     done < <(find "$SOURCE_DIR" -path "$FINISHED_DIR" -prune -o -type f \( -iname "*.mkv" -o -iname "*.mp4" -o -iname "*.ts" -o -iname "*.m2ts" -o -iname "*.avi" -o -iname "*.mov" -o -iname "*.wmv" \) -print0)
 
-    printf '%s\0' "${files[@]}"
+    local f
+    for f in "${files[@]}"; do
+        printf '%s\0' "$f"
+    done
 }
 
 wait_for_new_files() {
@@ -577,7 +580,7 @@ wait_for_new_files() {
 run_batch_once() {
     local files=()
     while IFS= read -r -d '' file; do
-        files+=("$file")
+        [ -n "$file" ] && files+=("$file")
     done < <(scan_files)
 
     local total_files=${#files[@]}
