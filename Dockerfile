@@ -39,6 +39,7 @@ RUN apt-get update && \
     libva-drm2 \
     libva-x11-2 \
     vainfo \
+    pciutils \
     bc \
     curl \
     wget \

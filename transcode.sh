@@ -6,6 +6,11 @@
 
 shopt -s nullglob
 
+
+echo "[INIT] VAAPI devices:"
+vainfo 2>&1 | grep -E "VAProfile|VAEntrypoint" || true
+
+
 # --- GLOBAL VARS ---
 METHOD="${ENCODE_METHOD:-cpu_h265}"
 THREADS_INPUT="${ENCODE_THREADS:-0}"
@@ -111,7 +116,7 @@ check_hardware() {
     # FIX: Increased test resolution from 64x64 to 128x128
     case "$METHOD" in
         "nvidia_"*) test_cmd="ffmpeg -y -f lavfi -i color=c=black:s=128x128 -vframes 1 -c:v hevc_nvenc -f null -" ;;
-        "intel_"*)  test_cmd="ffmpeg -y -hwaccel vaapi -hwaccel_output_format vaapi -vaapi_device /dev/dri/renderD128 -f lavfi -i color=c=black:s=128x128 -vframes 1 -c:v hevc_vaapi -f null -" ;;
+        "intel_"*) test_cmd="ffmpeg -y -vaapi_device /dev/dri/renderD128 -f lavfi -i color=c=black:s=128x128,format=nv12,hwupload -frames:v 1 -c:v hevc_vaapi -f null -" ;;        
         *)          test_cmd="true" ;;
     esac
 
@@ -143,7 +148,7 @@ get_ffmpeg_cmd() {
         "nvidia_av1")  echo "${cmd_prefix[@]} -hwaccel cuda -hwaccel_output_format cuda -i \"$input\" -map 0 -c:v av1_nvenc -cq $CQ_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
         "nvidia_h265") echo "${cmd_prefix[@]} -hwaccel cuda -hwaccel_output_format cuda -i \"$input\" -map 0 -c:v hevc_nvenc -cq $CQ_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
         "intel_av1")   echo "${cmd_prefix[@]} -hwaccel vaapi -hwaccel_output_format vaapi -vaapi_device /dev/dri/renderD128 -i \"$input\" -map 0 -c:v av1_qsv -global_quality $CRF_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
-        "intel_h265")  echo "${cmd_prefix[@]} -hwaccel vaapi -hwaccel_output_format vaapi -vaapi_device /dev/dri/renderD128 -i \"$input\" -map 0 -c:v hevc_vaapi -vf 'format=nv12,hwupload' -qp $CRF_VALUE $audio_sub_args \"$output\"" ;;
+        "intel_h265")  echo "${cmd_prefix[@]} -hwaccel vaapi -hwaccel_output_format vaapi -vaapi_device /dev/dri/renderD128 -i \"$input\" -map 0 -c:v hevc_vaapi -vf 'format=nv12,hwupload' -qp $CRF_VALUE $audio_sub_args \"$output\"" ;;        
         "cpu_av1")     echo "${cmd_prefix[@]} -i \"$input\" $generic_thread_arg -map 0 -c:v libsvtav1 -crf $CRF_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
         *)             echo "${cmd_prefix[@]} -i \"$input\" $x265_safe_arg -map 0 -c:v libx265 -crf $CRF_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
     esac
