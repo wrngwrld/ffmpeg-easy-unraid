@@ -248,7 +248,7 @@ get_ffmpeg_cmd() {
     local x265_hdr_args=""
 
     if [ "$FINAL_LIVE_PREVIEW" -eq 1 ]; then
-        cmd_prefix+=(-loglevel warning -stats_period "$FINAL_PROGRESS_INTERVAL" -progress pipe:1 -nostats)
+        cmd_prefix+=(-loglevel warning -stats_period "$FINAL_PROGRESS_INTERVAL" -progress pipe:2 -nostats)
     else
         cmd_prefix+=(-loglevel error -stats)
     fi
@@ -328,8 +328,8 @@ process_one_file() {
 
     local log_tag="[ENC $index/$total $fname_no_ext] "
     if [ "$FINAL_LIVE_PREVIEW" -eq 1 ]; then
+        echo "${log_tag}Starting ffmpeg encode..."
         eval "$CMD_STR" \
-            > >(awk -v p="$log_tag" '{ print p $0; fflush() }') \
             2> >(grep -v -e 'Failed to set thread priority' -e 'set_mempolicy' | awk -v p="$log_tag" '{ print p $0; fflush() }' >&2)
     else
         eval "$CMD_STR 2> >(grep -v -e 'Failed to set thread priority' -e 'set_mempolicy' >&2)"
