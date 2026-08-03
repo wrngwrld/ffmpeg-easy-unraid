@@ -265,9 +265,17 @@ get_ffmpeg_cmd() {
     local rate_control_args=""
 
     if [ "$FINAL_LIVE_PREVIEW" -eq 1 ]; then
-        cmd_prefix+=(-loglevel warning -stats_period "$FINAL_PROGRESS_INTERVAL" -progress pipe:2 -nostats)
+        if [ "$FINAL_LOG_MODE" = "compact" ]; then
+            cmd_prefix+=(-loglevel warning -stats_period "$FINAL_PROGRESS_INTERVAL" -progress pipe:2 -nostats)
+        else
+            cmd_prefix+=(-loglevel info -stats_period "$FINAL_PROGRESS_INTERVAL" -progress pipe:2 -nostats)
+        fi
     else
-        cmd_prefix+=(-loglevel error -stats)
+        if [ "$FINAL_LOG_MODE" = "compact" ]; then
+            cmd_prefix+=(-loglevel error -stats)
+        else
+            cmd_prefix+=(-loglevel warning -stats)
+        fi
     fi
 
     if [ "$source_color_range" = "tv" ] || [ "$source_color_range" = "pc" ]; then
@@ -391,7 +399,6 @@ process_one_file() {
         local ff_pid=$!
 
         while kill -0 "$ff_pid" 2>/dev/null; do
-            sleep "$FINAL_HEARTBEAT_SECONDS"
             if kill -0 "$ff_pid" 2>/dev/null; then
                 local elapsed=$((SECONDS - encode_start))
                 local current_out_live_size=0
@@ -450,6 +457,8 @@ process_one_file() {
                     echo "$progress_line"
                 fi
             fi
+
+            sleep "$FINAL_HEARTBEAT_SECONDS"
         done
 
         wait "$ff_pid"
@@ -670,10 +679,13 @@ emit_parallel_progress_snapshots() {
                 [ "$state" = "done" ] && state_tag="DONE"
                 [ "$state" = "fail" ] && state_tag="FAIL"
 
+                local bar
+                bar=$(render_progress_bar "$pct" 12)
+
                 if [ -n "$summary" ]; then
                     summary+=" | "
                 fi
-                summary+="#${idx} ${state_tag} ${pct}% @${speed}"
+                summary+="#${idx} ${state_tag} [${bar}] ${pct}% @${speed}"
             done
         fi
 
@@ -794,7 +806,18 @@ run_batch_once() {
         else
             local progress_status_file="$progress_dir/$current_index.status"
             process_one_file "$input_file" "$current_index" "$total_files" "$result_dir/$current_index.result" "$progress_status_file" &
-            while [ "$(jobs -rp | wc -l)" -ge "$FINAL_PARALLEL_JOBS" ]; do
+            while true; do
+                local running_workers
+                if [ -n "$renderer_pid" ]; then
+                    running_workers=$(jobs -rp | awk -v rp="$renderer_pid" '$1 != rp' | wc -l)
+                else
+                    running_workers=$(jobs -rp | wc -l)
+                fi
+
+                if [ "$running_workers" -lt "$FINAL_PARALLEL_JOBS" ]; then
+                    break
+                fi
+
                 wait -n
             done
         fi
