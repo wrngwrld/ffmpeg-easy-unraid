@@ -16,6 +16,8 @@ PARALLEL_JOBS_INPUT="${ENCODE_PARALLEL_JOBS:-1}"
 WATCH_MODE_INPUT="${ENCODE_WATCH_MODE:-0}"
 WATCH_POLL_SECONDS_INPUT="${ENCODE_WATCH_POLL_SECONDS:-30}"
 FILE_STABLE_SECONDS_INPUT="${ENCODE_FILE_STABLE_SECONDS:-5}"
+LIVE_PREVIEW_INPUT="${ENCODE_LIVE_PREVIEW:-1}"
+PROGRESS_INTERVAL_INPUT="${ENCODE_PROGRESS_INTERVAL:-2}"
 
 TARGET_UID="${UNRAID_UID:-99}"
 TARGET_GID="${UNRAID_GID:-100}"
@@ -34,6 +36,8 @@ FINAL_PARALLEL_JOBS=1
 FINAL_WATCH_MODE=0
 FINAL_WATCH_POLL_SECONDS=30
 FINAL_FILE_STABLE_SECONDS=5
+FINAL_LIVE_PREVIEW=1
+FINAL_PROGRESS_INTERVAL=2
 START_TIME=$SECONDS
 SIZE_IN_TOTAL=0
 SIZE_OUT_TOTAL=0
@@ -130,10 +134,27 @@ configure_settings() {
         echo "[WARN] Invalid ENCODE_FILE_STABLE_SECONDS='$FILE_STABLE_SECONDS_INPUT'. Falling back to 5."
         FINAL_FILE_STABLE_SECONDS=5
     fi
+
+    # G) Live Preview Logging
+    case "${LIVE_PREVIEW_INPUT,,}" in
+        1|true|yes|on) FINAL_LIVE_PREVIEW=1 ;;
+        0|false|no|off|"") FINAL_LIVE_PREVIEW=0 ;;
+        *)
+            echo "[WARN] Invalid ENCODE_LIVE_PREVIEW='$LIVE_PREVIEW_INPUT'. Falling back to 1."
+            FINAL_LIVE_PREVIEW=1
+            ;;
+    esac
+
+    if [[ "$PROGRESS_INTERVAL_INPUT" =~ ^[0-9]+$ ]] && [ "$PROGRESS_INTERVAL_INPUT" -ge 1 ]; then
+        FINAL_PROGRESS_INTERVAL="$PROGRESS_INTERVAL_INPUT"
+    else
+        echo "[WARN] Invalid ENCODE_PROGRESS_INTERVAL='$PROGRESS_INTERVAL_INPUT'. Falling back to 2."
+        FINAL_PROGRESS_INTERVAL=2
+    fi
 }
 
 check_paths() {
-    echo "[INIT] Method: $METHOD | Preset: $PRESET | CRF/CQ: $CRF_VALUE/$CQ_VALUE | Parallel Jobs: $FINAL_PARALLEL_JOBS | Watch Mode: $FINAL_WATCH_MODE | Stable Seconds: $FINAL_FILE_STABLE_SECONDS"
+    echo "[INIT] Method: $METHOD | Preset: $PRESET | CRF/CQ: $CRF_VALUE/$CQ_VALUE | Parallel Jobs: $FINAL_PARALLEL_JOBS | Watch Mode: $FINAL_WATCH_MODE | Stable Seconds: $FINAL_FILE_STABLE_SECONDS | Live Preview: $FINAL_LIVE_PREVIEW"
     if [ ! -d "$SOURCE_DIR" ]; then echo "[FATAL] /import missing."; exit 1; fi
 
     local r_src; r_src=$(realpath "$SOURCE_DIR")
@@ -214,7 +235,7 @@ get_ffmpeg_cmd() {
     local hdr_transfer="$4"
     local hdr_primaries="$5"
     local hdr_colorspace="$6"
-    local cmd_prefix=(ffmpeg -hide_banner -loglevel error -stats -y)
+    local cmd_prefix=(ffmpeg -hide_banner -y)
     local audio_sub_args="${CUSTOM_ARGS:--c:a copy -c:s copy}"
     
     local x265_safe_arg=""
@@ -225,6 +246,12 @@ get_ffmpeg_cmd() {
     local nvidia_h265_hdr_args=""
     local cpu_av1_hdr_args=""
     local x265_hdr_args=""
+
+    if [ "$FINAL_LIVE_PREVIEW" -eq 1 ]; then
+        cmd_prefix+=(-loglevel warning -stats_period "$FINAL_PROGRESS_INTERVAL" -progress pipe:1 -nostats)
+    else
+        cmd_prefix+=(-loglevel error -stats)
+    fi
 
     if [ "$FINAL_THREADS" -gt 0 ]; then
         x265_safe_arg="-x265-params pools=$FINAL_THREADS"
@@ -299,7 +326,14 @@ process_one_file() {
     local CMD_STR
     CMD_STR=$(get_ffmpeg_cmd "$input_file" "$out_file" "$IS_HDR" "$HDR_TRANSFER" "$HDR_PRIMARIES" "$HDR_COLORSPACE")
 
-    eval "$CMD_STR 2> >(grep -v -e 'Failed to set thread priority' -e 'set_mempolicy' >&2)"
+    local log_tag="[ENC $index/$total $fname_no_ext] "
+    if [ "$FINAL_LIVE_PREVIEW" -eq 1 ]; then
+        eval "$CMD_STR" \
+            > >(awk -v p="$log_tag" '{ print p $0; fflush() }') \
+            2> >(grep -v -e 'Failed to set thread priority' -e 'set_mempolicy' | awk -v p="$log_tag" '{ print p $0; fflush() }' >&2)
+    else
+        eval "$CMD_STR 2> >(grep -v -e 'Failed to set thread priority' -e 'set_mempolicy' >&2)"
+    fi
 
     if [ $? -eq 0 ]; then
         local current_out_size

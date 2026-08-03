@@ -105,6 +105,8 @@ The container is controlled via Environment Variables.
 | `ENCODE_WATCH_MODE`          | `0`        | **Continuous Folder Watch.**<br>`0` = Run once and stop.<br>`1` = Keep container running and automatically process new files when they are copied into `/import`.                                 |
 | `ENCODE_WATCH_POLL_SECONDS`  | `30`       | **Watch Fallback Interval.**<br>Used only if inotify is unavailable inside the container.<br>Minimum valid value: `5`.                                                                            |
 | `ENCODE_FILE_STABLE_SECONDS` | `5`        | **Copy Safety Gate.**<br>Before encoding starts, file size must remain unchanged for this many seconds.<br>Set `0` to disable the stability wait.                                                 |
+| `ENCODE_LIVE_PREVIEW`        | `1`        | **Live Encode Progress in Logs.**<br>`1` = show ongoing ffmpeg progress output while encoding.<br>`0` = quieter logs.                                                                             |
+| `ENCODE_PROGRESS_INTERVAL`   | `2`        | **Progress Update Interval (seconds).**<br>How often live progress is emitted when live preview is enabled.<br>Minimum valid value: `1`.                                                          |
 | `ENCODE_CRF`                 | _(Smart)_  | **Quality for CPU/Intel.**<br>Lower value = Better Quality, Larger File.<br>Defaults: `18` (H.265), `24` (AV1).                                                                                   |
 | `ENCODE_CQ`                  | _(Smart)_  | **Quality for Nvidia.**<br>Lower value = Better Quality, Larger File.<br>Defaults: `19` (H.265), `24` (AV1).                                                                                      |
 | `ENCODE_MAP_ARGS`            | `-map 0`   | **Stream Selection.**<br>Default maps all streams (video, all audio tracks, subtitles, attachments).<br>Example for smaller files: `-map 0:v:0 -map 0:a:0` (first video + first audio only).      |
@@ -135,6 +137,13 @@ Automatic processing when new files arrive:
 ```text
 ENCODE_WATCH_MODE=1
 ENCODE_FILE_STABLE_SECONDS=5
+```
+
+Live encode preview in logs:
+
+```text
+ENCODE_LIVE_PREVIEW=1
+ENCODE_PROGRESS_INTERVAL=2
 ```
 
 This approximates your HandBrake behavior (first video + first audio, AAC stereo, no subtitles). HDR sources remain HDR with the script's HDR-preservation logic.

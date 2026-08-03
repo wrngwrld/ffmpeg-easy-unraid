@@ -21,6 +21,8 @@ services:
       - ENCODE_WATCH_MODE=0 # 0 = Run-Once, 1 = Watch folder continuously
       - ENCODE_WATCH_POLL_SECONDS=30 # Poll fallback interval if inotify is unavailable
       - ENCODE_FILE_STABLE_SECONDS=5 # Wait for unchanged file size before encoding
+      - ENCODE_LIVE_PREVIEW=1 # Show live ffmpeg progress in container logs
+      - ENCODE_PROGRESS_INTERVAL=2 # Progress update interval in seconds
       - ENCODE_CRF= # Leave empty for Smart Default (18/24)
       - ENCODE_CQ= # Leave empty for Smart Default (Nvidia)
       - FFMPEG_CUSTOM_ARGS= # E.g. "-c:a aac" for audio conversion
