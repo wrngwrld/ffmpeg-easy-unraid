@@ -72,10 +72,6 @@ The container is controlled via Environment Variables.
 | `ENCODE_FILE_STABLE_SECONDS` | `5`          | **Copy Safety Gate.**<br>Before encoding starts, file size must remain unchanged for this many seconds.<br>Set `0` to disable the stability wait.                                            |
 | `ENCODE_LIVE_PREVIEW`        | `1`          | **Live Encode Progress in Logs.**<br>`1` = show ongoing ffmpeg progress output while encoding.<br>`0` = quieter logs.                                                                        |
 | `ENCODE_PROGRESS_INTERVAL`   | `2`          | **Progress Update Interval (seconds).**<br>How often live progress is emitted when live preview is enabled.<br>Minimum valid value: `1`.                                                     |
-| `ENCODE_LOG_MODE`            | `detailed`   | **Live Log Verbosity.**<br>`detailed` = ffmpeg live lines + heartbeat.<br>`compact` = only start/heartbeat/final status (plus ffmpeg error tail on failure).                                 |
-| `ENCODE_PROGRESS_STYLE`      | `ascii`      | **Progress Bar Style.**<br>`ascii` = `#`/`-` bar.<br>`unicode` = block-style bar (`█`/`░`) for a cleaner look.                                                                               |
-| `ENCODE_PROGRESS_COLOR`      | `auto`       | **Progress Bar Color.**<br>`auto` = color only on interactive terminals.<br>`1` = force color.<br>`0` = disable color.                                                                       |
-| `ENCODE_BITRATE_MODE`        | `quality`    | **Video Rate Control Mode.**<br>`quality` = QP quality mode (default).<br>`source` = use detected source video bitrate (`-b:v`) per file; if unavailable, falls back to quality mode.        |
 | `ENCODE_HEARTBEAT_SECONDS`   | `10`         | **Live Heartbeat Interval (seconds).**<br>Emits periodic runtime/output-size updates per active encode job to guarantee visible progress even when ffmpeg progress is sparse.                |
 | `ENCODE_QP`                  | `22`         | **Intel H.265 Quality Control.**<br>Lower = better quality/larger files, higher = smaller files/lower quality.                                                                               |
 | `ENCODE_MAP_ARGS`            | `-map 0`     | **Stream Selection.**<br>Default maps all streams (video, all audio tracks, subtitles, attachments).<br>Example for smaller files: `-map 0:v:0 -map 0:a:0` (first video + first audio only). |
@@ -113,24 +109,14 @@ Live encode preview in logs:
 ENCODE_LIVE_PREVIEW=1
 ENCODE_PROGRESS_INTERVAL=2
 ENCODE_HEARTBEAT_SECONDS=10
-ENCODE_LOG_MODE=compact
-ENCODE_PROGRESS_STYLE=unicode
-ENCODE_PROGRESS_COLOR=auto
-```
-
-Use source-like bitrate behavior:
-
-```text
-ENCODE_BITRATE_MODE=source
-```
-
-Color range behavior:
-
-```text
-source color range is auto-passed through when available (tv/pc)
 ```
 
 This approximates your HandBrake behavior (first video + first audio, AAC stereo, no subtitles). HDR sources remain HDR with the script's HDR-preservation logic.
+
+Current Lite behavior:
+
+- Rate control is QP-only (`ENCODE_QP`).
+- Progress bars use a fixed unicode style in logs.
 
 ### Recommended Profiles (i5-13400)
 

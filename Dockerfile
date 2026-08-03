@@ -14,9 +14,8 @@ LABEL description="Simple H265 and AV1 Batch Transcoder"
 ENV DEBIAN_FRONTEND=noninteractive
 
 # --- CONFIG DEFAULTS ---
-ENV ENCODE_METHOD=cpu_h265
-ENV ENCODE_PRESET=default
-ENV ENCODE_THREADS=0
+ENV ENCODE_METHOD=intel_h265
+ENV ENCODE_QP=22
 
 # Custom Arguments
 ENV FFMPEG_CUSTOM_ARGS=""

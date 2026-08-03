@@ -17,10 +17,6 @@ FILE_STABLE_SECONDS_INPUT="${ENCODE_FILE_STABLE_SECONDS:-5}"
 LIVE_PREVIEW_INPUT="${ENCODE_LIVE_PREVIEW:-1}"
 PROGRESS_INTERVAL_INPUT="${ENCODE_PROGRESS_INTERVAL:-2}"
 HEARTBEAT_SECONDS_INPUT="${ENCODE_HEARTBEAT_SECONDS:-10}"
-LOG_MODE_INPUT="${ENCODE_LOG_MODE:-detailed}"
-BITRATE_MODE_INPUT="${ENCODE_BITRATE_MODE:-quality}"
-PROGRESS_STYLE_INPUT="${ENCODE_PROGRESS_STYLE:-ascii}"
-PROGRESS_COLOR_INPUT="${ENCODE_PROGRESS_COLOR:-auto}"
 
 TARGET_UID="${UNRAID_UID:-99}"
 TARGET_GID="${UNRAID_GID:-100}"
@@ -37,10 +33,6 @@ FINAL_FILE_STABLE_SECONDS=5
 FINAL_LIVE_PREVIEW=1
 FINAL_PROGRESS_INTERVAL=2
 FINAL_HEARTBEAT_SECONDS=10
-FINAL_LOG_MODE="detailed"
-FINAL_BITRATE_MODE="quality"
-FINAL_PROGRESS_STYLE="ascii"
-FINAL_PROGRESS_COLOR=0
 START_TIME=$SECONDS
 SIZE_IN_TOTAL=0
 SIZE_OUT_TOTAL=0
@@ -116,60 +108,10 @@ configure_settings() {
         FINAL_HEARTBEAT_SECONDS=10
     fi
 
-    # G) Log Mode
-    case "${LOG_MODE_INPUT,,}" in
-        detailed|full) FINAL_LOG_MODE="detailed" ;;
-        compact|quiet) FINAL_LOG_MODE="compact" ;;
-        *)
-            echo "[WARN] Invalid ENCODE_LOG_MODE='$LOG_MODE_INPUT'. Falling back to detailed."
-            FINAL_LOG_MODE="detailed"
-            ;;
-    esac
-
-    # H) Progress Bar Style
-    case "${PROGRESS_STYLE_INPUT,,}" in
-        ascii) FINAL_PROGRESS_STYLE="ascii" ;;
-        unicode|blocks|block) FINAL_PROGRESS_STYLE="unicode" ;;
-        *)
-            echo "[WARN] Invalid ENCODE_PROGRESS_STYLE='$PROGRESS_STYLE_INPUT'. Falling back to ascii."
-            FINAL_PROGRESS_STYLE="ascii"
-            ;;
-    esac
-
-    # I) Progress Color
-    case "${PROGRESS_COLOR_INPUT,,}" in
-        1|true|yes|on) FINAL_PROGRESS_COLOR=1 ;;
-        0|false|no|off) FINAL_PROGRESS_COLOR=0 ;;
-        auto|"")
-            if [ -t 1 ]; then
-                FINAL_PROGRESS_COLOR=1
-            else
-                FINAL_PROGRESS_COLOR=0
-            fi
-            ;;
-        *)
-            echo "[WARN] Invalid ENCODE_PROGRESS_COLOR='$PROGRESS_COLOR_INPUT'. Falling back to auto."
-            if [ -t 1 ]; then
-                FINAL_PROGRESS_COLOR=1
-            else
-                FINAL_PROGRESS_COLOR=0
-            fi
-            ;;
-    esac
-
-    # J) Bitrate Mode
-    case "${BITRATE_MODE_INPUT,,}" in
-        quality) FINAL_BITRATE_MODE="quality" ;;
-        source|source_bitrate) FINAL_BITRATE_MODE="source" ;;
-        *)
-            echo "[WARN] Invalid ENCODE_BITRATE_MODE='$BITRATE_MODE_INPUT'. Falling back to quality."
-            FINAL_BITRATE_MODE="quality"
-            ;;
-    esac
 }
 
 check_paths() {
-    echo "[INIT] Method: $METHOD | QP: $QP_VALUE | Parallel Jobs: $FINAL_PARALLEL_JOBS | Watch Mode: $FINAL_WATCH_MODE | Stable Seconds: $FINAL_FILE_STABLE_SECONDS | Live Preview: $FINAL_LIVE_PREVIEW | Log Mode: $FINAL_LOG_MODE | Bitrate Mode: $FINAL_BITRATE_MODE"
+    echo "[INIT] Method: $METHOD | QP: $QP_VALUE | Parallel Jobs: $FINAL_PARALLEL_JOBS | Watch Mode: $FINAL_WATCH_MODE | Stable Seconds: $FINAL_FILE_STABLE_SECONDS | Live Preview: $FINAL_LIVE_PREVIEW"
     if [ ! -d "$SOURCE_DIR" ]; then echo "[FATAL] /import missing."; exit 1; fi
 
     local r_src; r_src=$(realpath "$SOURCE_DIR")
@@ -214,10 +156,9 @@ detect_video_metadata() {
     local primaries=""
     local colorspace=""
     local color_range=""
-    local bitrate=""
 
-    probe=$(ffprobe -v error -select_streams v:0 -show_entries stream=color_transfer,color_primaries,color_space,color_range,bit_rate,pix_fmt -of csv=p=0 "$input" 2>/dev/null | head -n1)
-    IFS=',' read -r transfer primaries colorspace color_range bitrate _ <<< "$probe"
+    probe=$(ffprobe -v error -select_streams v:0 -show_entries stream=color_transfer,color_primaries,color_space,color_range,pix_fmt -of csv=p=0 "$input" 2>/dev/null | head -n1)
+    IFS=',' read -r transfer primaries colorspace color_range _ <<< "$probe"
 
     transfer=$(echo "$transfer" | tr '[:upper:]' '[:lower:]')
     primaries=$(echo "$primaries" | tr '[:upper:]' '[:lower:]')
@@ -227,10 +168,6 @@ detect_video_metadata() {
     if [ "$color_range" = "unknown" ] || [ "$color_range" = "n/a" ]; then
         color_range=""
     fi
-    if [ "$bitrate" = "N/A" ] || [ "$bitrate" = "n/a" ]; then
-        bitrate=""
-    fi
-
     if [ "$transfer" = "smpte2084" ] || [ "$transfer" = "arib-std-b67" ]; then
         if [ -z "$primaries" ] || [ "$primaries" = "unknown" ]; then
             primaries="bt2020"
@@ -238,9 +175,9 @@ detect_video_metadata() {
         if [ -z "$colorspace" ] || [ "$colorspace" = "unknown" ]; then
             colorspace="bt2020nc"
         fi
-        echo "1|$transfer|$primaries|$colorspace|$color_range|$bitrate"
+        echo "1|$transfer|$primaries|$colorspace|$color_range"
     else
-        echo "0||||$color_range|$bitrate"
+        echo "0||||$color_range"
     fi
 }
 
@@ -251,8 +188,6 @@ get_ffmpeg_cmd() {
     local hdr_primaries="$5"
     local hdr_colorspace="$6"
     local source_color_range="$7"
-    local bitrate_mode="$8"
-    local source_bitrate="$9"
     local cmd_prefix=(ffmpeg -hide_banner -y)
     local audio_sub_args="${CUSTOM_ARGS:--c:a copy -c:s copy}"
     
@@ -260,28 +195,15 @@ get_ffmpeg_cmd() {
     local intel_hdr_args=""
     local intel_sdr_args=""
     local color_range_args=""
-    local rate_control_args=""
 
     if [ "$FINAL_LIVE_PREVIEW" -eq 1 ]; then
-        if [ "$FINAL_LOG_MODE" = "compact" ]; then
-            cmd_prefix+=(-loglevel warning -stats_period "$FINAL_PROGRESS_INTERVAL" -progress pipe:2 -nostats)
-        else
-            cmd_prefix+=(-loglevel info -stats_period "$FINAL_PROGRESS_INTERVAL" -progress pipe:2 -nostats)
-        fi
+        cmd_prefix+=(-loglevel warning -stats_period "$FINAL_PROGRESS_INTERVAL" -progress pipe:2 -nostats)
     else
-        if [ "$FINAL_LOG_MODE" = "compact" ]; then
-            cmd_prefix+=(-loglevel error -stats)
-        else
-            cmd_prefix+=(-loglevel warning -stats)
-        fi
+        cmd_prefix+=(-loglevel error -stats)
     fi
 
     if [ "$source_color_range" = "tv" ] || [ "$source_color_range" = "pc" ]; then
         color_range_args="-color_range $source_color_range"
-    fi
-
-    if [ "$bitrate_mode" = "source" ] && [[ "$source_bitrate" =~ ^[0-9]+$ ]] && [ "$source_bitrate" -gt 0 ]; then
-        rate_control_args="-b:v $source_bitrate"
     fi
 
     intel_sdr_args="$color_range_args"
@@ -294,8 +216,7 @@ get_ffmpeg_cmd() {
     local intel_color_args="$intel_sdr_args"
     [ "$hdr_flag" -eq 1 ] && intel_color_args="$intel_hdr_args"
 
-    local intel_rate_args="$rate_control_args"
-    [ -z "$intel_rate_args" ] && intel_rate_args="-qp $QP_VALUE"
+    local intel_rate_args="-qp $QP_VALUE"
 
     echo "${cmd_prefix[@]} -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -vaapi_device /dev/dri/renderD128 -i \"$input\" $MAP_ARGS -vf \"$intel_filter\" -c:v hevc_vaapi $intel_color_args $intel_rate_args $audio_sub_args \"$output\""
 }
@@ -348,28 +269,20 @@ process_one_file() {
 
     local VIDEO_META
     VIDEO_META=$(detect_video_metadata "$input_file")
-    local IS_HDR HDR_TRANSFER HDR_PRIMARIES HDR_COLORSPACE SRC_COLOR_RANGE SRC_VIDEO_BITRATE
-    IFS='|' read -r IS_HDR HDR_TRANSFER HDR_PRIMARIES HDR_COLORSPACE SRC_COLOR_RANGE SRC_VIDEO_BITRATE <<< "$VIDEO_META"
+    local IS_HDR HDR_TRANSFER HDR_PRIMARIES HDR_COLORSPACE SRC_COLOR_RANGE
+    IFS='|' read -r IS_HDR HDR_TRANSFER HDR_PRIMARIES HDR_COLORSPACE SRC_COLOR_RANGE <<< "$VIDEO_META"
     local log_tag="[ENC $index/$total $fname_no_ext] "
 
     if [ "$IS_HDR" -eq 1 ]; then
         echo "[INFO] HDR source detected (transfer=$HDR_TRANSFER, primaries=$HDR_PRIMARIES, colorspace=$HDR_COLORSPACE). Preserving HDR signaling."
     fi
-    if [ "$FINAL_BITRATE_MODE" = "source" ]; then
-        if [[ "$SRC_VIDEO_BITRATE" =~ ^[0-9]+$ ]] && [ "$SRC_VIDEO_BITRATE" -gt 0 ]; then
-            echo "${log_tag}Using source bitrate mode: ${SRC_VIDEO_BITRATE} bps"
-        else
-            echo "${log_tag}Source bitrate unavailable. Falling back to quality mode for this file."
-        fi
-    fi
-
+    
     local CMD_STR
-    CMD_STR=$(get_ffmpeg_cmd "$input_file" "$out_file" "$IS_HDR" "$HDR_TRANSFER" "$HDR_PRIMARIES" "$HDR_COLORSPACE" "$SRC_COLOR_RANGE" "$FINAL_BITRATE_MODE" "$SRC_VIDEO_BITRATE")
+    CMD_STR=$(get_ffmpeg_cmd "$input_file" "$out_file" "$IS_HDR" "$HDR_TRANSFER" "$HDR_PRIMARIES" "$HDR_COLORSPACE" "$SRC_COLOR_RANGE")
 
     local ff_ret=0
     local ff_err_log=""
     local ff_progress_log=""
-    local can_use_color=0
     if [ -n "$progress_status_file" ]; then
         printf 'state=run|index=%s|name=%s|pct=0.00|speed=n/a|elapsed=0|out=0\n' "$index" "$short_name" > "$progress_status_file"
     fi
@@ -379,17 +292,8 @@ process_one_file() {
         ff_progress_log=$(mktemp /tmp/ffmpeg-progress.XXXXXX)
         local CMD_RUN_STR="$CMD_STR"
         CMD_RUN_STR=${CMD_RUN_STR/ -nostats/ -nostats -progress \"$ff_progress_log\"}
-        if [ -t 1 ] && [ "$FINAL_PROGRESS_COLOR" -eq 1 ]; then
-            can_use_color=1
-        fi
-
-        if [ "$FINAL_LOG_MODE" = "compact" ]; then
-            ff_err_log=$(mktemp /tmp/ffmpeg-err.XXXXXX)
-            eval "$CMD_RUN_STR" 2> "$ff_err_log" &
-        else
-            eval "$CMD_RUN_STR" \
-                2> >(awk -v p="$log_tag" '!/Failed to set thread priority|set_mempolicy/ { print p $0; fflush() }' >&2) &
-        fi
+        ff_err_log=$(mktemp /tmp/ffmpeg-err.XXXXXX)
+        eval "$CMD_RUN_STR" 2> "$ff_err_log" &
         local ff_pid=$!
 
         while kill -0 "$ff_pid" 2>/dev/null; do
@@ -424,25 +328,8 @@ process_one_file() {
                     fi
                 fi
 
-                local decorated_bar="[${bar}]"
-                local decorated_pct="${pct_display}%"
-                if [ "$can_use_color" -eq 1 ]; then
-                    local c_reset=$'\033[0m'
-                    local c_bar=$'\033[36m'
-                    local c_pct=$'\033[33m'
-                    if [[ "$pct_display" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-                        if awk -v p="$pct_display" 'BEGIN { exit !(p >= 90) }'; then
-                            c_pct=$'\033[32m'
-                        elif awk -v p="$pct_display" 'BEGIN { exit !(p >= 60) }'; then
-                            c_pct=$'\033[92m'
-                        fi
-                    fi
-                    decorated_bar="${c_bar}[${bar}]${c_reset}"
-                    decorated_pct="${c_pct}${pct_display}%${c_reset}"
-                fi
-
                 local progress_head="[ENC $index/$total]"
-                local progress_line="${progress_head} ${decorated_bar} ${decorated_pct} | ${short_name} | speed ${speed_display} | t=${elapsed}s | out $(format_bytes_dual "$current_out_live_size")"
+                local progress_line="${progress_head} [${bar}] ${pct_display}% | ${short_name} | speed ${speed_display} | t=${elapsed}s | out $(format_bytes_dual "$current_out_live_size")"
                 if [ -n "$progress_status_file" ]; then
                     printf 'state=run|index=%s|name=%s|pct=%s|speed=%s|elapsed=%s|out=%s\n' "$index" "$short_name" "$pct_display" "$speed_display" "$elapsed" "$current_out_live_size" > "$progress_status_file"
                 else
@@ -456,7 +343,7 @@ process_one_file() {
         wait "$ff_pid"
         ff_ret=$?
 
-        if [ "$ff_ret" -ne 0 ] && [ "$FINAL_LOG_MODE" = "compact" ] && [ -n "$ff_err_log" ] && [ -f "$ff_err_log" ]; then
+        if [ "$ff_ret" -ne 0 ] && [ -n "$ff_err_log" ] && [ -f "$ff_err_log" ]; then
             echo "${log_tag}ffmpeg failed. Last log lines:"
             tail -n 40 "$ff_err_log" | awk -v p="$log_tag" '!/Failed to set thread priority|set_mempolicy/ { print p $0; fflush() }'
         fi
@@ -539,14 +426,9 @@ render_progress_bar() {
     }')
 
     local empty=$((width - filled))
-    local fill_char="#"
-    local empty_char="-"
+    local fill_char="█"
+    local empty_char="░"
     local bar=""
-
-    if [ "$FINAL_PROGRESS_STYLE" = "unicode" ]; then
-        fill_char="█"
-        empty_char="░"
-    fi
 
     bar="$(repeat_char "$fill_char" "$filled")$(repeat_char "$empty_char" "$empty")"
 
