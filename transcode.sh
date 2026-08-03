@@ -11,6 +11,7 @@ METHOD="${ENCODE_METHOD:-cpu_h265}"
 THREADS_INPUT="${ENCODE_THREADS:-0}"
 PRESET_INPUT="${ENCODE_PRESET:-default}"
 CUSTOM_ARGS="${FFMPEG_CUSTOM_ARGS:-}"
+MAP_ARGS="${ENCODE_MAP_ARGS:--map 0}"
 
 TARGET_UID="${UNRAID_UID:-99}"
 TARGET_GID="${UNRAID_GID:-100}"
@@ -139,31 +140,77 @@ check_hardware() {
     fi
 }
 
+detect_hdr_metadata() {
+    local input="$1"
+    local probe=""
+    local transfer=""
+    local primaries=""
+    local colorspace=""
+
+    probe=$(ffprobe -v error -select_streams v:0 -show_entries stream=color_transfer,color_primaries,color_space,pix_fmt -of csv=p=0 "$input" 2>/dev/null | head -n1)
+    IFS=',' read -r transfer primaries colorspace _ <<< "$probe"
+
+    transfer=$(echo "$transfer" | tr '[:upper:]' '[:lower:]')
+    primaries=$(echo "$primaries" | tr '[:upper:]' '[:lower:]')
+    colorspace=$(echo "$colorspace" | tr '[:upper:]' '[:lower:]')
+
+    if [ "$transfer" = "smpte2084" ] || [ "$transfer" = "arib-std-b67" ]; then
+        if [ -z "$primaries" ] || [ "$primaries" = "unknown" ]; then
+            primaries="bt2020"
+        fi
+        if [ -z "$colorspace" ] || [ "$colorspace" = "unknown" ]; then
+            colorspace="bt2020nc"
+        fi
+        echo "1|$transfer|$primaries|$colorspace"
+    else
+        echo "0|||"
+    fi
+}
+
 get_ffmpeg_cmd() {
     local input="$1"; local output="$2"
+    local hdr_flag="${3:-0}"
+    local hdr_transfer="$4"
+    local hdr_primaries="$5"
+    local hdr_colorspace="$6"
     local cmd_prefix=(ffmpeg -hide_banner -loglevel error -stats -y)
     local audio_sub_args="${CUSTOM_ARGS:--c:a copy -c:s copy}"
     
     local x265_safe_arg=""
     local generic_thread_arg=""
+    local intel_filter="format=nv12,hwupload"
+    local intel_hdr_args=""
+    local nvidia_av1_hdr_args=""
+    local nvidia_h265_hdr_args=""
+    local cpu_av1_hdr_args=""
+    local x265_hdr_args=""
 
     if [ "$FINAL_THREADS" -gt 0 ]; then
         x265_safe_arg="-x265-params pools=$FINAL_THREADS"
         generic_thread_arg="-threads $FINAL_THREADS"
     fi
 
+    if [ "$hdr_flag" -eq 1 ]; then
+        intel_filter="format=p010le,hwupload"
+        intel_hdr_args="-profile:v main10 -color_primaries $hdr_primaries -color_trc $hdr_transfer -colorspace $hdr_colorspace"
+        nvidia_av1_hdr_args="-pix_fmt p010le -color_primaries $hdr_primaries -color_trc $hdr_transfer -colorspace $hdr_colorspace"
+        nvidia_h265_hdr_args="-profile:v main10 -pix_fmt p010le -color_primaries $hdr_primaries -color_trc $hdr_transfer -colorspace $hdr_colorspace"
+        cpu_av1_hdr_args="-pix_fmt yuv420p10le -color_primaries $hdr_primaries -color_trc $hdr_transfer -colorspace $hdr_colorspace"
+        x265_hdr_args="-pix_fmt yuv420p10le -color_primaries $hdr_primaries -color_trc $hdr_transfer -colorspace $hdr_colorspace"
+    fi
+
     case "$METHOD" in
-        "nvidia_av1")  echo "${cmd_prefix[@]} -hwaccel cuda -hwaccel_output_format cuda -i \"$input\" -map 0 -c:v av1_nvenc -cq $CQ_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
-        "nvidia_h265") echo "${cmd_prefix[@]} -hwaccel cuda -hwaccel_output_format cuda -i \"$input\" -map 0 -c:v hevc_nvenc -cq $CQ_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
+        "nvidia_av1")  echo "${cmd_prefix[@]} -hwaccel cuda -hwaccel_output_format cuda -i \"$input\" $MAP_ARGS -c:v av1_nvenc $nvidia_av1_hdr_args -cq $CQ_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
+        "nvidia_h265") echo "${cmd_prefix[@]} -hwaccel cuda -hwaccel_output_format cuda -i \"$input\" $MAP_ARGS -c:v hevc_nvenc $nvidia_h265_hdr_args -cq $CQ_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
         "intel_av1")
         echo "[FATAL] Intel AV1 encoding not supported by this GPU."
         return 1
         ;;
         "intel_h265")
-        echo "${cmd_prefix[@]} -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -vaapi_device /dev/dri/renderD128 -i \"$input\" -map 0 -vf \"format=nv12,hwupload\" -c:v hevc_vaapi -qp $QP_VALUE $audio_sub_args \"$output\""
+        echo "${cmd_prefix[@]} -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -vaapi_device /dev/dri/renderD128 -i \"$input\" $MAP_ARGS -vf \"$intel_filter\" -c:v hevc_vaapi $intel_hdr_args -qp $QP_VALUE $audio_sub_args \"$output\""
         ;;
-        "cpu_av1")     echo "${cmd_prefix[@]} -i \"$input\" $generic_thread_arg -map 0 -c:v libsvtav1 -crf $CRF_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
-        *)             echo "${cmd_prefix[@]} -i \"$input\" $x265_safe_arg -map 0 -c:v libx265 -crf $CRF_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
+        "cpu_av1")     echo "${cmd_prefix[@]} -i \"$input\" $generic_thread_arg $MAP_ARGS -c:v libsvtav1 $cpu_av1_hdr_args -crf $CRF_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
+        *)             echo "${cmd_prefix[@]} -i \"$input\" $x265_safe_arg $MAP_ARGS -c:v libx265 $x265_hdr_args -crf $CRF_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
     esac
 }
 
@@ -227,8 +274,14 @@ for input_file in "${FILES[@]}"; do
     [ -f "$out_file" ] && rm "$out_file"
 
     current_in_size=$(stat -c%s "$input_file")
+    HDR_META=$(detect_hdr_metadata "$input_file")
+    IFS='|' read -r IS_HDR HDR_TRANSFER HDR_PRIMARIES HDR_COLORSPACE <<< "$HDR_META"
+
+    if [ "$IS_HDR" -eq 1 ]; then
+        echo "[INFO] HDR source detected (transfer=$HDR_TRANSFER, primaries=$HDR_PRIMARIES, colorspace=$HDR_COLORSPACE). Preserving HDR signaling."
+    fi
     
-    CMD_STR=$(get_ffmpeg_cmd "$input_file" "$out_file")
+    CMD_STR=$(get_ffmpeg_cmd "$input_file" "$out_file" "$IS_HDR" "$HDR_TRANSFER" "$HDR_PRIMARIES" "$HDR_COLORSPACE")
     
     eval "$CMD_STR 2> >(grep -v -e 'Failed to set thread priority' -e 'set_mempolicy' >&2)"
 
