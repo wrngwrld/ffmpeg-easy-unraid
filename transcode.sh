@@ -28,7 +28,6 @@ TARGET_GID="${UNRAID_GID:-100}"
 SOURCE_DIR="/import"
 EXPORT_DIR="/export"
 FINISHED_DIR="$SOURCE_DIR/finished"
-LOG_FILE="$EXPORT_DIR/history.log"
 
 QP_VALUE=""
 FINAL_PARALLEL_JOBS=1
@@ -182,7 +181,6 @@ check_paths() {
     mkdir -p "$EXPORT_DIR"
     mkdir -p "$FINISHED_DIR"
     chown "$TARGET_UID":"$TARGET_GID" "$FINISHED_DIR"
-    touch "$LOG_FILE"
 }
 
 check_hardware() {
@@ -508,7 +506,6 @@ process_one_file() {
         if [ -n "$progress_status_file" ]; then
             printf 'state=done|index=%s|name=%s|pct=100.00|speed=done|elapsed=0|out=%s\n' "$index" "$short_name" "$current_out_size" > "$progress_status_file"
         fi
-        echo "DONE: $rel_path" >> "$LOG_FILE"
         chown "$TARGET_UID":"$TARGET_GID" "$out_file"
         chmod 666 "$out_file"
 
