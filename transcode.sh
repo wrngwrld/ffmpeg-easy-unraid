@@ -7,9 +7,7 @@
 shopt -s nullglob
 
 # --- GLOBAL VARS ---
-METHOD="${ENCODE_METHOD:-cpu_h265}"
-THREADS_INPUT="${ENCODE_THREADS:-0}"
-PRESET_INPUT="${ENCODE_PRESET:-default}"
+METHOD="${ENCODE_METHOD:-intel_h265}"
 CUSTOM_ARGS="${FFMPEG_CUSTOM_ARGS:-}"
 MAP_ARGS="${ENCODE_MAP_ARGS:--map 0}"
 PARALLEL_JOBS_INPUT="${ENCODE_PARALLEL_JOBS:-1}"
@@ -18,6 +16,9 @@ WATCH_POLL_SECONDS_INPUT="${ENCODE_WATCH_POLL_SECONDS:-30}"
 FILE_STABLE_SECONDS_INPUT="${ENCODE_FILE_STABLE_SECONDS:-5}"
 LIVE_PREVIEW_INPUT="${ENCODE_LIVE_PREVIEW:-1}"
 PROGRESS_INTERVAL_INPUT="${ENCODE_PROGRESS_INTERVAL:-2}"
+HEARTBEAT_SECONDS_INPUT="${ENCODE_HEARTBEAT_SECONDS:-10}"
+LOG_MODE_INPUT="${ENCODE_LOG_MODE:-detailed}"
+BITRATE_MODE_INPUT="${ENCODE_BITRATE_MODE:-quality}"
 
 TARGET_UID="${UNRAID_UID:-99}"
 TARGET_GID="${UNRAID_GID:-100}"
@@ -27,17 +28,16 @@ EXPORT_DIR="/export"
 FINISHED_DIR="$SOURCE_DIR/finished"
 LOG_FILE="$EXPORT_DIR/history.log"
 
-CRF_VALUE=""
-CQ_VALUE=""
 QP_VALUE=""
-PRESET=""
-FINAL_THREADS=0
 FINAL_PARALLEL_JOBS=1
 FINAL_WATCH_MODE=0
 FINAL_WATCH_POLL_SECONDS=30
 FINAL_FILE_STABLE_SECONDS=5
 FINAL_LIVE_PREVIEW=1
 FINAL_PROGRESS_INTERVAL=2
+FINAL_HEARTBEAT_SECONDS=10
+FINAL_LOG_MODE="detailed"
+FINAL_BITRATE_MODE="quality"
 START_TIME=$SECONDS
 SIZE_IN_TOTAL=0
 SIZE_OUT_TOTAL=0
@@ -47,62 +47,15 @@ SIZE_OUT_TOTAL=0
 # ==============================================================================
 
 configure_settings() {
-    # A) Smart Defaults: CRF/CQ
-    if [ -z "$ENCODE_CRF" ] && [ -z "$ENCODE_CQ" ]; then
-        if [[ "$METHOD" == *"av1"* ]]; then
-            CRF_VALUE=24; CQ_VALUE=24
-        else
-            CRF_VALUE=18; CQ_VALUE=19
-        fi
-    else
-        CRF_VALUE="${ENCODE_CRF:-18}"
-        CQ_VALUE="${ENCODE_CQ:-19}"
+    if [ "$METHOD" != "intel_h265" ]; then
+        echo "[WARN] ENCODE_METHOD '$METHOD' is no longer supported. Using 'intel_h265'."
+        METHOD="intel_h265"
     fi
 
+    # A) Intel H.265 quality control
     QP_VALUE="${ENCODE_QP:-22}"
 
-    # B) Smart Defaults: Preset
-    if [ "$PRESET_INPUT" == "default" ]; then
-        if [[ "$METHOD" == *"nvidia"* ]]; then PRESET="p4";
-        elif [[ "$METHOD" == *"cpu_av1"* ]]; then PRESET="8";
-        else PRESET="medium"; fi
-    else
-        PRESET="$PRESET_INPUT"
-    fi
-
-    # C) CPU Safety & Thread Logic
-    local host_cores=$(nproc --all)
-    local container_cores=$(nproc)
-    local pinning_active=0
-    
-    if [ "$container_cores" -lt "$host_cores" ]; then
-        pinning_active=1
-    fi
-
-    if [ "$THREADS_INPUT" -eq 0 ] && [[ "$METHOD" == *"cpu"* ]]; then
-        if [ "$pinning_active" -eq 1 ]; then
-            echo "[INIT] CPU Pinning detected ($container_cores assigned). Using max performance."
-            FINAL_THREADS=0 
-        else
-            local safe_limit=$((host_cores / 2))
-            [ "$safe_limit" -lt 1 ] && safe_limit=1
-            echo "[INIT] NO Pinning detected (Seen $host_cores cores)."
-            echo "[CONFIRM] SAFETY MODE Active: Limiting to $safe_limit threads (50%)."
-            FINAL_THREADS=$safe_limit
-        fi
-    else
-        FINAL_THREADS="$THREADS_INPUT"
-        if [[ "$METHOD" == *"cpu"* ]]; then
-            if [ "$pinning_active" -eq 0 ] && [ "$FINAL_THREADS" -gt 0 ]; then
-                 echo "[INIT] NO Pinning detected."
-                 echo "[CONFIRM] Manual Limit Active: Using $FINAL_THREADS threads."
-            elif [ "$pinning_active" -eq 1 ] && [ "$FINAL_THREADS" -gt 0 ]; then
-                 echo "[CONFIRM] Pinning + Manual Limit: Using $FINAL_THREADS threads."
-            fi
-        fi
-    fi
-
-    # D) Parallel Job Count
+    # B) Parallel Job Count
     if [[ "$PARALLEL_JOBS_INPUT" =~ ^[0-9]+$ ]] && [ "$PARALLEL_JOBS_INPUT" -ge 1 ]; then
         FINAL_PARALLEL_JOBS="$PARALLEL_JOBS_INPUT"
     else
@@ -110,7 +63,7 @@ configure_settings() {
         FINAL_PARALLEL_JOBS=1
     fi
 
-    # E) Watch Mode
+    # C) Watch Mode
     case "${WATCH_MODE_INPUT,,}" in
         1|true|yes|on) FINAL_WATCH_MODE=1 ;;
         0|false|no|off|"") FINAL_WATCH_MODE=0 ;;
@@ -127,7 +80,7 @@ configure_settings() {
         FINAL_WATCH_POLL_SECONDS=30
     fi
 
-    # F) File Stability Gate (seconds with unchanged size before processing)
+    # D) File Stability Gate (seconds with unchanged size before processing)
     if [[ "$FILE_STABLE_SECONDS_INPUT" =~ ^[0-9]+$ ]]; then
         FINAL_FILE_STABLE_SECONDS="$FILE_STABLE_SECONDS_INPUT"
     else
@@ -135,7 +88,7 @@ configure_settings() {
         FINAL_FILE_STABLE_SECONDS=5
     fi
 
-    # G) Live Preview Logging
+    # E) Live Preview Logging
     case "${LIVE_PREVIEW_INPUT,,}" in
         1|true|yes|on) FINAL_LIVE_PREVIEW=1 ;;
         0|false|no|off|"") FINAL_LIVE_PREVIEW=0 ;;
@@ -151,10 +104,38 @@ configure_settings() {
         echo "[WARN] Invalid ENCODE_PROGRESS_INTERVAL='$PROGRESS_INTERVAL_INPUT'. Falling back to 2."
         FINAL_PROGRESS_INTERVAL=2
     fi
+
+    # F) Heartbeat Interval for Live Preview
+    if [[ "$HEARTBEAT_SECONDS_INPUT" =~ ^[0-9]+$ ]] && [ "$HEARTBEAT_SECONDS_INPUT" -ge 1 ]; then
+        FINAL_HEARTBEAT_SECONDS="$HEARTBEAT_SECONDS_INPUT"
+    else
+        echo "[WARN] Invalid ENCODE_HEARTBEAT_SECONDS='$HEARTBEAT_SECONDS_INPUT'. Falling back to 10."
+        FINAL_HEARTBEAT_SECONDS=10
+    fi
+
+    # G) Log Mode
+    case "${LOG_MODE_INPUT,,}" in
+        detailed|full) FINAL_LOG_MODE="detailed" ;;
+        compact|quiet) FINAL_LOG_MODE="compact" ;;
+        *)
+            echo "[WARN] Invalid ENCODE_LOG_MODE='$LOG_MODE_INPUT'. Falling back to detailed."
+            FINAL_LOG_MODE="detailed"
+            ;;
+    esac
+
+    # H) Bitrate Mode
+    case "${BITRATE_MODE_INPUT,,}" in
+        quality) FINAL_BITRATE_MODE="quality" ;;
+        source|source_bitrate) FINAL_BITRATE_MODE="source" ;;
+        *)
+            echo "[WARN] Invalid ENCODE_BITRATE_MODE='$BITRATE_MODE_INPUT'. Falling back to quality."
+            FINAL_BITRATE_MODE="quality"
+            ;;
+    esac
 }
 
 check_paths() {
-    echo "[INIT] Method: $METHOD | Preset: $PRESET | CRF/CQ: $CRF_VALUE/$CQ_VALUE | Parallel Jobs: $FINAL_PARALLEL_JOBS | Watch Mode: $FINAL_WATCH_MODE | Stable Seconds: $FINAL_FILE_STABLE_SECONDS | Live Preview: $FINAL_LIVE_PREVIEW"
+    echo "[INIT] Method: $METHOD | QP: $QP_VALUE | Parallel Jobs: $FINAL_PARALLEL_JOBS | Watch Mode: $FINAL_WATCH_MODE | Stable Seconds: $FINAL_FILE_STABLE_SECONDS | Live Preview: $FINAL_LIVE_PREVIEW | Log Mode: $FINAL_LOG_MODE | Bitrate Mode: $FINAL_BITRATE_MODE"
     if [ ! -d "$SOURCE_DIR" ]; then echo "[FATAL] /import missing."; exit 1; fi
 
     local r_src; r_src=$(realpath "$SOURCE_DIR")
@@ -170,14 +151,7 @@ check_paths() {
 }
 
 check_hardware() {
-    # Refresh library cache for Nvidia
-    ldconfig > /dev/null 2>&1
-
-    local test_cmd=""
-    # FIX: Increased test resolution from 64x64 to 128x128
-    case "$METHOD" in
-        "nvidia_"*) test_cmd="ffmpeg -y -f lavfi -i color=c=black:s=128x128 -vframes 1 -c:v hevc_nvenc -f null -" ;;
-        "intel_"*) test_cmd="ffmpeg -y \
+    local test_cmd="ffmpeg -y \
         -init_hw_device vaapi=va:/dev/dri/renderD128 \
         -filter_hw_device va \
         -vaapi_device /dev/dri/renderD128 \
@@ -187,9 +161,7 @@ check_hardware() {
         -frames:v 1 \
         -c:v hevc_vaapi \
         -qp 22 \
-        -f null -" ;;      
-        *)          test_cmd="true" ;;
-    esac
+        -f null -"
 
     if ! eval "$test_cmd" > /dev/null 2> /tmp/hw_check.log; then
         echo "[FATAL] Hardware check failed for '$METHOD'."
@@ -197,24 +169,34 @@ check_hardware() {
         echo "FFmpeg Error Output:"
         cat /tmp/hw_check.log
         echo "--------------------------------------------------------"
-        echo "Hint: If using Nvidia, ensure drivers are up to date on host."
+        echo "Hint: Ensure Intel iGPU device mapping (/dev/dri) is available to the container."
         exit 1
     fi
 }
 
-detect_hdr_metadata() {
+detect_video_metadata() {
     local input="$1"
     local probe=""
     local transfer=""
     local primaries=""
     local colorspace=""
+    local color_range=""
+    local bitrate=""
 
-    probe=$(ffprobe -v error -select_streams v:0 -show_entries stream=color_transfer,color_primaries,color_space,pix_fmt -of csv=p=0 "$input" 2>/dev/null | head -n1)
-    IFS=',' read -r transfer primaries colorspace _ <<< "$probe"
+    probe=$(ffprobe -v error -select_streams v:0 -show_entries stream=color_transfer,color_primaries,color_space,color_range,bit_rate,pix_fmt -of csv=p=0 "$input" 2>/dev/null | head -n1)
+    IFS=',' read -r transfer primaries colorspace color_range bitrate _ <<< "$probe"
 
     transfer=$(echo "$transfer" | tr '[:upper:]' '[:lower:]')
     primaries=$(echo "$primaries" | tr '[:upper:]' '[:lower:]')
     colorspace=$(echo "$colorspace" | tr '[:upper:]' '[:lower:]')
+    color_range=$(echo "$color_range" | tr '[:upper:]' '[:lower:]')
+
+    if [ "$color_range" = "unknown" ] || [ "$color_range" = "n/a" ]; then
+        color_range=""
+    fi
+    if [ "$bitrate" = "N/A" ] || [ "$bitrate" = "n/a" ]; then
+        bitrate=""
+    fi
 
     if [ "$transfer" = "smpte2084" ] || [ "$transfer" = "arib-std-b67" ]; then
         if [ -z "$primaries" ] || [ "$primaries" = "unknown" ]; then
@@ -223,9 +205,9 @@ detect_hdr_metadata() {
         if [ -z "$colorspace" ] || [ "$colorspace" = "unknown" ]; then
             colorspace="bt2020nc"
         fi
-        echo "1|$transfer|$primaries|$colorspace"
+        echo "1|$transfer|$primaries|$colorspace|$color_range|$bitrate"
     else
-        echo "0|||"
+        echo "0||||$color_range|$bitrate"
     fi
 }
 
@@ -235,17 +217,17 @@ get_ffmpeg_cmd() {
     local hdr_transfer="$4"
     local hdr_primaries="$5"
     local hdr_colorspace="$6"
+    local source_color_range="$7"
+    local bitrate_mode="$8"
+    local source_bitrate="$9"
     local cmd_prefix=(ffmpeg -hide_banner -y)
     local audio_sub_args="${CUSTOM_ARGS:--c:a copy -c:s copy}"
     
-    local x265_safe_arg=""
-    local generic_thread_arg=""
     local intel_filter="format=nv12,hwupload"
     local intel_hdr_args=""
-    local nvidia_av1_hdr_args=""
-    local nvidia_h265_hdr_args=""
-    local cpu_av1_hdr_args=""
-    local x265_hdr_args=""
+    local intel_sdr_args=""
+    local color_range_args=""
+    local rate_control_args=""
 
     if [ "$FINAL_LIVE_PREVIEW" -eq 1 ]; then
         cmd_prefix+=(-loglevel warning -stats_period "$FINAL_PROGRESS_INTERVAL" -progress pipe:2 -nostats)
@@ -253,33 +235,28 @@ get_ffmpeg_cmd() {
         cmd_prefix+=(-loglevel error -stats)
     fi
 
-    if [ "$FINAL_THREADS" -gt 0 ]; then
-        x265_safe_arg="-x265-params pools=$FINAL_THREADS"
-        generic_thread_arg="-threads $FINAL_THREADS"
+    if [ "$source_color_range" = "tv" ] || [ "$source_color_range" = "pc" ]; then
+        color_range_args="-color_range $source_color_range"
     fi
+
+    if [ "$bitrate_mode" = "source" ] && [[ "$source_bitrate" =~ ^[0-9]+$ ]] && [ "$source_bitrate" -gt 0 ]; then
+        rate_control_args="-b:v $source_bitrate"
+    fi
+
+    intel_sdr_args="$color_range_args"
 
     if [ "$hdr_flag" -eq 1 ]; then
         intel_filter="format=p010le,hwupload"
-        intel_hdr_args="-profile:v main10 -color_primaries $hdr_primaries -color_trc $hdr_transfer -colorspace $hdr_colorspace"
-        nvidia_av1_hdr_args="-pix_fmt p010le -color_primaries $hdr_primaries -color_trc $hdr_transfer -colorspace $hdr_colorspace"
-        nvidia_h265_hdr_args="-profile:v main10 -pix_fmt p010le -color_primaries $hdr_primaries -color_trc $hdr_transfer -colorspace $hdr_colorspace"
-        cpu_av1_hdr_args="-pix_fmt yuv420p10le -color_primaries $hdr_primaries -color_trc $hdr_transfer -colorspace $hdr_colorspace"
-        x265_hdr_args="-pix_fmt yuv420p10le -color_primaries $hdr_primaries -color_trc $hdr_transfer -colorspace $hdr_colorspace"
+        intel_hdr_args="-profile:v main10 -color_primaries $hdr_primaries -color_trc $hdr_transfer -colorspace $hdr_colorspace $color_range_args"
     fi
 
-    case "$METHOD" in
-        "nvidia_av1")  echo "${cmd_prefix[@]} -hwaccel cuda -hwaccel_output_format cuda -i \"$input\" $MAP_ARGS -c:v av1_nvenc $nvidia_av1_hdr_args -cq $CQ_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
-        "nvidia_h265") echo "${cmd_prefix[@]} -hwaccel cuda -hwaccel_output_format cuda -i \"$input\" $MAP_ARGS -c:v hevc_nvenc $nvidia_h265_hdr_args -cq $CQ_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
-        "intel_av1")
-        echo "[FATAL] Intel AV1 encoding not supported by this GPU."
-        return 1
-        ;;
-        "intel_h265")
-        echo "${cmd_prefix[@]} -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -vaapi_device /dev/dri/renderD128 -i \"$input\" $MAP_ARGS -vf \"$intel_filter\" -c:v hevc_vaapi $intel_hdr_args -qp $QP_VALUE $audio_sub_args \"$output\""
-        ;;
-        "cpu_av1")     echo "${cmd_prefix[@]} -i \"$input\" $generic_thread_arg $MAP_ARGS -c:v libsvtav1 $cpu_av1_hdr_args -crf $CRF_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
-        *)             echo "${cmd_prefix[@]} -i \"$input\" $x265_safe_arg $MAP_ARGS -c:v libx265 $x265_hdr_args -crf $CRF_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
-    esac
+    local intel_color_args="$intel_sdr_args"
+    [ "$hdr_flag" -eq 1 ] && intel_color_args="$intel_hdr_args"
+
+    local intel_rate_args="$rate_control_args"
+    [ -z "$intel_rate_args" ] && intel_rate_args="-qp $QP_VALUE"
+
+    echo "${cmd_prefix[@]} -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -vaapi_device /dev/dri/renderD128 -i \"$input\" $MAP_ARGS -vf \"$intel_filter\" -c:v hevc_vaapi $intel_color_args $intel_rate_args $audio_sub_args \"$output\""
 }
 
 process_one_file() {
@@ -314,32 +291,89 @@ process_one_file() {
     local current_in_size
     current_in_size=$(stat -c%s "$input_file")
 
-    local HDR_META
-    HDR_META=$(detect_hdr_metadata "$input_file")
-    local IS_HDR HDR_TRANSFER HDR_PRIMARIES HDR_COLORSPACE
-    IFS='|' read -r IS_HDR HDR_TRANSFER HDR_PRIMARIES HDR_COLORSPACE <<< "$HDR_META"
+    local VIDEO_META
+    VIDEO_META=$(detect_video_metadata "$input_file")
+    local IS_HDR HDR_TRANSFER HDR_PRIMARIES HDR_COLORSPACE SRC_COLOR_RANGE SRC_VIDEO_BITRATE
+    IFS='|' read -r IS_HDR HDR_TRANSFER HDR_PRIMARIES HDR_COLORSPACE SRC_COLOR_RANGE SRC_VIDEO_BITRATE <<< "$VIDEO_META"
+    local log_tag="[ENC $index/$total $fname_no_ext] "
 
     if [ "$IS_HDR" -eq 1 ]; then
         echo "[INFO] HDR source detected (transfer=$HDR_TRANSFER, primaries=$HDR_PRIMARIES, colorspace=$HDR_COLORSPACE). Preserving HDR signaling."
     fi
-
-    local CMD_STR
-    CMD_STR=$(get_ffmpeg_cmd "$input_file" "$out_file" "$IS_HDR" "$HDR_TRANSFER" "$HDR_PRIMARIES" "$HDR_COLORSPACE")
-
-    local log_tag="[ENC $index/$total $fname_no_ext] "
-    if [ "$FINAL_LIVE_PREVIEW" -eq 1 ]; then
-        echo "${log_tag}Starting ffmpeg encode..."
-        eval "$CMD_STR" \
-            2> >(awk -v p="$log_tag" '!/Failed to set thread priority|set_mempolicy/ { print p $0; fflush() }' >&2)
-    else
-        eval "$CMD_STR 2> >(grep -v -e 'Failed to set thread priority' -e 'set_mempolicy' >&2)"
+    if [ "$FINAL_BITRATE_MODE" = "source" ]; then
+        if [[ "$SRC_VIDEO_BITRATE" =~ ^[0-9]+$ ]] && [ "$SRC_VIDEO_BITRATE" -gt 0 ]; then
+            echo "${log_tag}Using source bitrate mode: ${SRC_VIDEO_BITRATE} bps"
+        else
+            echo "${log_tag}Source bitrate unavailable. Falling back to quality mode for this file."
+        fi
     fi
 
-    if [ $? -eq 0 ]; then
+    local CMD_STR
+    CMD_STR=$(get_ffmpeg_cmd "$input_file" "$out_file" "$IS_HDR" "$HDR_TRANSFER" "$HDR_PRIMARIES" "$HDR_COLORSPACE" "$SRC_COLOR_RANGE" "$FINAL_BITRATE_MODE" "$SRC_VIDEO_BITRATE")
+
+    local ff_ret=0
+    local ff_err_log=""
+    if [ "$FINAL_LIVE_PREVIEW" -eq 1 ]; then
+        echo "${log_tag}Starting ffmpeg encode..."
+        local encode_start=$SECONDS
+        if [ "$FINAL_LOG_MODE" = "compact" ]; then
+            ff_err_log=$(mktemp /tmp/ffmpeg-err.XXXXXX)
+            eval "$CMD_STR" 2> "$ff_err_log" &
+        else
+            eval "$CMD_STR" \
+                2> >(awk -v p="$log_tag" '!/Failed to set thread priority|set_mempolicy/ { print p $0; fflush() }' >&2) &
+        fi
+        local ff_pid=$!
+
+        while kill -0 "$ff_pid" 2>/dev/null; do
+            sleep "$FINAL_HEARTBEAT_SECONDS"
+            if kill -0 "$ff_pid" 2>/dev/null; then
+                local elapsed=$((SECONDS - encode_start))
+                local current_out_live_size=0
+                if [ -f "$out_file" ]; then
+                    current_out_live_size=$(stat -c%s "$out_file" 2>/dev/null || echo 0)
+                fi
+                echo "${log_tag}Heartbeat: running ${elapsed}s, output $(format_bytes_dual "$current_out_live_size")"
+            fi
+        done
+
+        wait "$ff_pid"
+        ff_ret=$?
+
+        if [ "$ff_ret" -ne 0 ] && [ "$FINAL_LOG_MODE" = "compact" ] && [ -n "$ff_err_log" ] && [ -f "$ff_err_log" ]; then
+            echo "${log_tag}ffmpeg failed. Last log lines:"
+            tail -n 40 "$ff_err_log" | awk -v p="$log_tag" '!/Failed to set thread priority|set_mempolicy/ { print p $0; fflush() }'
+        fi
+
+        if [ -n "$ff_err_log" ] && [ -f "$ff_err_log" ]; then
+            rm -f "$ff_err_log"
+        fi
+    else
+        eval "$CMD_STR 2> >(grep -v -e 'Failed to set thread priority' -e 'set_mempolicy' >&2)"
+        ff_ret=$?
+    fi
+
+    if [ "$ff_ret" -eq 0 ]; then
         local current_out_size
         current_out_size=$(stat -c%s "$out_file")
 
+        local file_in_txt file_out_txt file_saved_txt file_saved_pct
+        file_in_txt=$(format_bytes_dual "$current_in_size")
+        file_out_txt=$(format_bytes_dual "$current_out_size")
+        file_saved_txt=$(awk -v i="$current_in_size" -v o="$current_out_size" 'BEGIN {
+            diff = i - o;
+            gb = diff / 1073741824;
+            mb = diff / 1048576;
+            printf "%.2f GB | %.2f MB", gb, mb
+        }')
+        if [ "$current_in_size" -gt 0 ]; then
+            file_saved_pct=$(awk -v i="$current_in_size" -v o="$current_out_size" 'BEGIN { printf "%.2f", ((i-o)/i)*100 }')
+        else
+            file_saved_pct="0.00"
+        fi
+
         echo "[DONE] Encoding success."
+        echo "${log_tag}File stats: input=$file_in_txt | output=$file_out_txt | saved=$file_saved_txt (${file_saved_pct}%)"
         echo "DONE: $rel_path" >> "$LOG_FILE"
         chown "$TARGET_UID":"$TARGET_GID" "$out_file"
         chmod 666 "$out_file"

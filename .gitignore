@@ -1,0 +1,31 @@
+# macOS noise
+.DS_Store
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Local test and runtime artifacts
+.localtest/
+.local-build.log
+
+# Local bind-mount style folders sometimes created for testing
+/import/
+/export/
+/finished/
+
+# Sample media folders
+/sample/
+/samples/
+/sample-media/
+/test-media/
+
+# Logs and temp runtime files
+*.log
+*.tmp
+*.temp
+
+# Editor/runtime caches
+.vscode/
+*.swp

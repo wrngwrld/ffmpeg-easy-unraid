@@ -14,17 +14,17 @@ services:
 
     environment:
       # --- Configuration ---
-      - ENCODE_METHOD=cpu_h265 # Options: cpu_h265, cpu_av1, nvidia_h265, intel_av1, etc.
-      - ENCODE_PRESET=default # default, slow, fast, p4, p7...
-      - ENCODE_THREADS=0 # 0 = Auto/Safety Mode, Number = Force specific thread count
+      - ENCODE_METHOD=intel_h265 # Only supported encoder method
       - ENCODE_PARALLEL_JOBS=1 # Number of files processed in parallel
       - ENCODE_WATCH_MODE=0 # 0 = Run-Once, 1 = Watch folder continuously
       - ENCODE_WATCH_POLL_SECONDS=30 # Poll fallback interval if inotify is unavailable
       - ENCODE_FILE_STABLE_SECONDS=5 # Wait for unchanged file size before encoding
       - ENCODE_LIVE_PREVIEW=1 # Show live ffmpeg progress in container logs
       - ENCODE_PROGRESS_INTERVAL=2 # Progress update interval in seconds
-      - ENCODE_CRF= # Leave empty for Smart Default (18/24)
-      - ENCODE_CQ= # Leave empty for Smart Default (Nvidia)
+      - ENCODE_HEARTBEAT_SECONDS=10 # Guaranteed per-job heartbeat interval
+      - ENCODE_LOG_MODE=detailed # detailed or compact live log output
+      - ENCODE_BITRATE_MODE=quality # quality or source bitrate mode
+      - ENCODE_QP=22 # Intel H265 quality control (lower=better quality)
       - FFMPEG_CUSTOM_ARGS= # E.g. "-c:a aac" for audio conversion
 
       # --- Permissions ---
@@ -32,10 +32,6 @@ services:
       # On Unraid, it is usually 99:100. Adjust this to match your host file owner!
       - UNRAID_UID=1000
       - UNRAID_GID=1000
-
-      # --- Nvidia Environment (Only needed for Nvidia) ---
-      # - NVIDIA_VISIBLE_DEVICES=all
-      # - NVIDIA_DRIVER_CAPABILITIES=all
 
     volumes:
       # Adjust the paths on the left side to match your host directories
@@ -45,12 +41,3 @@ services:
     # --- HARDWARE: INTEL (Uncomment for QuickSync/Arc support) ---
     # devices:
     #   - /dev/dri:/dev/dri
-
-    # --- HARDWARE: NVIDIA (Uncomment for NVENC support) ---
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]

@@ -34,8 +34,6 @@ ENV NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ffmpeg \
-    intel-media-va-driver \
-    i965-va-driver \
     libva-drm2 \
     libva-x11-2 \
     vainfo \
@@ -43,8 +41,10 @@ RUN apt-get update && \
     inotify-tools \
     bc \
     curl \
-    wget \
-    && apt-get clean && \
+    wget && \
+    if ! apt-get install -y --no-install-recommends intel-media-va-driver; then echo "[WARN] intel-media-va-driver unavailable on this architecture; skipping"; fi && \
+    if ! apt-get install -y --no-install-recommends i965-va-driver; then echo "[WARN] i965-va-driver unavailable on this architecture; skipping"; fi && \
+    apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 # Root directories for simplified access
