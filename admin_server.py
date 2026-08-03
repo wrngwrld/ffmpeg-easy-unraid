@@ -18,6 +18,7 @@ IMPORT_DIR = Path("/import")
 FINISHED_DIR = IMPORT_DIR / "finished"
 CONFIG_DIR = Path("/export/.ffmpeg-easy-admin")
 RULES_FILE = CONFIG_DIR / "rules.json"
+STATS_FILE = CONFIG_DIR / "stats.json"
 RESCAN_TRIGGER = IMPORT_DIR / ".ffmpeg-easy-rescan.trigger"
 MEDIA_EXTENSIONS = {".mkv", ".mp4", ".ts", ".m2ts", ".avi", ".mov", ".wmv"}
 
@@ -204,6 +205,48 @@ def read_status() -> dict:
     }
 
 
+def default_stats_payload() -> dict:
+    return {
+        "version": 1,
+        "updatedAt": "",
+        "totals": {
+            "processed": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "inputBytes": 0,
+            "outputBytes": 0,
+            "savedBytes": 0,
+            "avgSavedPercent": 0.0,
+        },
+        "recentFiles": [],
+    }
+
+
+def read_stats() -> dict:
+    if STATS_FILE.exists():
+        try:
+            payload = json.loads(STATS_FILE.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                default_payload = default_stats_payload()
+                default_payload.update(payload)
+
+                totals = default_payload.get("totals", {})
+                if not isinstance(totals, dict):
+                    totals = {}
+
+                merged_totals = default_stats_payload()["totals"]
+                merged_totals.update(totals)
+                default_payload["totals"] = merged_totals
+
+                recent_files = default_payload.get("recentFiles", [])
+                default_payload["recentFiles"] = recent_files if isinstance(recent_files, list) else []
+                return default_payload
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    return default_stats_payload()
+
+
 def read_jobs() -> list[dict]:
     if not PROGRESS_DIR.exists():
         return []
@@ -271,6 +314,7 @@ class AdminHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/api/status"):
             payload = read_status()
+            stats_payload = read_stats()
             queue_count = count_queue_files()
             jobs = read_jobs()
             parallel_jobs = int(payload.get("parallelJobs", 1) or 1)
@@ -281,6 +325,7 @@ class AdminHandler(SimpleHTTPRequestHandler):
             payload["queueEtaSeconds"] = None if queue_eta_seconds is None else int(round(queue_eta_seconds))
             payload["queueEtaLabel"] = format_duration(queue_eta_seconds)
             payload["rulesCount"] = len(read_rules().get("rules", []))
+            payload["stats"] = stats_payload
             payload["servedAt"] = datetime.now(timezone.utc).isoformat()
             self.send_json(payload)
             return

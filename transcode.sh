@@ -26,6 +26,7 @@ EXPORT_DIR="/export"
 FINISHED_DIR="$SOURCE_DIR/finished"
 ADMIN_CONFIG_DIR="$EXPORT_DIR/.ffmpeg-easy-admin"
 ADMIN_RULES_FILE="$ADMIN_CONFIG_DIR/rules.json"
+ADMIN_STATS_FILE="$ADMIN_CONFIG_DIR/stats.json"
 ADMIN_STATE_DIR="/tmp/ffmpeg-easy-admin"
 ADMIN_PROGRESS_DIR="$ADMIN_STATE_DIR/progress"
 ADMIN_STATUS_FILE="$ADMIN_STATE_DIR/status.json"
@@ -127,6 +128,141 @@ admin_write_status() {
   "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF
+}
+
+admin_record_file_stat() {
+    local rel_path="$1"
+    local status="$2"
+    local input_bytes="${3:-0}"
+    local output_bytes="${4:-0}"
+    local qp_used="${5:-0}"
+    local stats_lock_file="$ADMIN_CONFIG_DIR/stats.lock"
+
+    mkdir -p "$ADMIN_CONFIG_DIR"
+
+    if command -v flock >/dev/null 2>&1; then
+        exec 9>"$stats_lock_file"
+        flock -x 9
+    fi
+
+    python3 - "$ADMIN_STATS_FILE" "$rel_path" "$status" "$input_bytes" "$output_bytes" "$METHOD" "$qp_used" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+stats_path = Path(sys.argv[1])
+rel_path = sys.argv[2]
+status = sys.argv[3]
+input_bytes = int(float(sys.argv[4]))
+output_bytes = int(float(sys.argv[5]))
+method = sys.argv[6]
+qp_used = int(float(sys.argv[7]))
+
+def default_payload() -> dict:
+    return {
+        "version": 1,
+        "updatedAt": "",
+        "totals": {
+            "processed": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "inputBytes": 0,
+            "outputBytes": 0,
+            "savedBytes": 0,
+            "avgSavedPercent": 0.0,
+        },
+        "recentFiles": [],
+    }
+
+payload = default_payload()
+if stats_path.exists():
+    try:
+        loaded = json.loads(stats_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            payload.update(loaded)
+    except (OSError, json.JSONDecodeError):
+        pass
+
+totals = payload.get("totals", {})
+if not isinstance(totals, dict):
+    totals = {}
+
+processed = int(totals.get("processed", 0)) + 1
+succeeded = int(totals.get("succeeded", 0)) + (1 if status == "SUCCESS" else 0)
+failed = int(totals.get("failed", 0)) + (1 if status != "SUCCESS" else 0)
+
+total_in = int(totals.get("inputBytes", 0)) + input_bytes
+total_out = int(totals.get("outputBytes", 0)) + output_bytes
+total_saved = total_in - total_out
+avg_saved_pct = (total_saved / total_in * 100.0) if total_in > 0 else 0.0
+
+saved_bytes = input_bytes - output_bytes
+saved_percent = (saved_bytes / input_bytes * 100.0) if input_bytes > 0 else 0.0
+
+entry = {
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "relativePath": rel_path,
+    "status": "succeeded" if status == "SUCCESS" else "failed",
+    "method": method,
+    "qp": qp_used,
+    "inputBytes": input_bytes,
+    "outputBytes": output_bytes,
+    "savedBytes": saved_bytes,
+    "savedPercent": round(saved_percent, 2),
+}
+
+recent_files = payload.get("recentFiles", [])
+if not isinstance(recent_files, list):
+    recent_files = []
+recent_files.insert(0, entry)
+recent_files = recent_files[:100]
+
+payload["updatedAt"] = datetime.now(timezone.utc).isoformat()
+payload["totals"] = {
+    "processed": processed,
+    "succeeded": succeeded,
+    "failed": failed,
+    "inputBytes": total_in,
+    "outputBytes": total_out,
+    "savedBytes": total_saved,
+    "avgSavedPercent": round(avg_saved_pct, 2),
+}
+payload["recentFiles"] = recent_files
+
+tmp = stats_path.with_suffix(".tmp")
+tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+tmp.replace(stats_path)
+PY
+
+    if command -v flock >/dev/null 2>&1; then
+        flock -u 9
+        exec 9>&-
+    fi
+}
+
+calculate_batch_totals() {
+    local result_dir="$1"
+    local success_count=0
+    local failed_count=0
+    local in_total=0
+    local out_total=0
+
+    local result status in_size out_size rel_path
+    for result in "$result_dir"/*.result; do
+        [ -f "$result" ] || continue
+        IFS='|' read -r status in_size out_size rel_path < "$result"
+
+        if [ "$status" = "SUCCESS" ]; then
+            ((success_count++))
+            in_total=$((in_total + in_size))
+            out_total=$((out_total + out_size))
+        else
+            ((failed_count++))
+        fi
+    done
+
+    printf '%s|%s|%s|%s\n' "$success_count" "$failed_count" "$in_total" "$out_total"
 }
 
 configure_settings() {
@@ -343,6 +479,7 @@ process_one_file() {
 
     if ! wait_for_file_stable "$input_file"; then
         echo "[FAIL] Source became unavailable while waiting for stable copy: $rel_path"
+        admin_record_file_stat "$rel_path" "FAIL" "0" "0" "$QP_VALUE"
         printf 'FAIL|0|0|%s\n' "$rel_path" > "$result_file"
         if [ -n "$progress_status_file" ]; then
             printf 'state=fail|index=%s|name=%s|pct=0.00|speed=n/a|elapsed=0|out=0\n' "$index" "$short_name" > "$progress_status_file"
@@ -488,6 +625,7 @@ process_one_file() {
         chown "$TARGET_UID":"$TARGET_GID" "$(dirname "$finish_dest")"
         mv "$input_file" "$finish_dest"
 
+        admin_record_file_stat "$rel_path" "SUCCESS" "$current_in_size" "$current_out_size" "$effective_qp"
         printf 'SUCCESS|%s|%s|%s\n' "$current_in_size" "$current_out_size" "$rel_path" > "$result_file"
     else
         echo "[FAIL] Error processing $rel_path"
@@ -495,6 +633,7 @@ process_one_file() {
         if [ -n "$progress_status_file" ]; then
             printf 'state=fail|index=%s|name=%s|pct=0.00|speed=fail|elapsed=0|out=0\n' "$index" "$short_name" > "$progress_status_file"
         fi
+        admin_record_file_stat "$rel_path" "FAIL" "$current_in_size" "0" "$effective_qp"
         printf 'FAIL|%s|0|%s\n' "$current_in_size" "$rel_path" > "$result_file"
     fi
 }
@@ -664,7 +803,6 @@ scan_files() {
 }
 
 wait_for_new_files() {
-    admin_write_status "watching" "Waiting for new files" "queue" 0 0 0
     if command -v inotifywait >/dev/null 2>&1; then
         echo "[WATCH] Waiting for new files in '$SOURCE_DIR' (inotify)..."
         # Wake on new folders too so the next pass can attach watches inside them.
@@ -710,6 +848,7 @@ run_batch_once() {
     local size_out_total=0
     local result_dir
     local batch_start=$SECONDS
+    local batch_stats
     result_dir=$(mktemp -d /tmp/ffmpeg-easy-results.XXXXXX)
     local progress_dir="$ADMIN_PROGRESS_DIR"
     local progress_stop_file="$ADMIN_STATE_DIR/progress.stop"
@@ -757,7 +896,7 @@ run_batch_once() {
                 seen_paths["$next_file"]=1
                 work_started=1
                 started_in_pass=1
-                admin_write_status "running" "Processing queued files" "$total_label" 0 "$count_success" "$count_failed"
+                admin_write_status "running" "Processing queued files" "$total_label" "$((count_success + count_failed))" "$count_success" "$count_failed"
 
                 if [ "$FINAL_PARALLEL_JOBS" -le 1 ]; then
                     process_one_file "$next_file" "$current_index" "$total_label" "$result_dir/$current_index.result" &
@@ -771,7 +910,7 @@ run_batch_once() {
 
             if [ "$work_started" -eq 0 ]; then
                 echo "[INFO] No files found."
-                admin_write_status "idle" "No files found" "$total_label" 0 0 0
+                admin_write_status "idle" "No files found" "$total_label" "$((count_success + count_failed))" "$count_success" "$count_failed"
                 break
             fi
 
@@ -785,6 +924,9 @@ run_batch_once() {
             fi
 
             wait -n
+            batch_stats=$(calculate_batch_totals "$result_dir")
+            IFS='|' read -r count_success count_failed size_in_total size_out_total <<< "$batch_stats"
+            admin_write_status "running" "Processing queued files" "$total_label" "$((count_success + count_failed))" "$count_success" "$count_failed"
         done
     else
         admin_write_status "running" "Processing batch" "$total_files" 0 0 0
@@ -808,6 +950,9 @@ run_batch_once() {
                     fi
 
                     wait -n
+                    batch_stats=$(calculate_batch_totals "$result_dir")
+                    IFS='|' read -r count_success count_failed size_in_total size_out_total <<< "$batch_stats"
+                    admin_write_status "running" "Processing batch" "$total_files" "$((count_success + count_failed))" "$count_success" "$count_failed"
                 done
             fi
         done
@@ -826,6 +971,9 @@ run_batch_once() {
                 fi
 
                 wait -n
+                batch_stats=$(calculate_batch_totals "$result_dir")
+                IFS='|' read -r count_success count_failed size_in_total size_out_total <<< "$batch_stats"
+                admin_write_status "running" "Processing batch" "$total_files" "$((count_success + count_failed))" "$count_success" "$count_failed"
             done
         fi
     fi
@@ -835,18 +983,8 @@ run_batch_once() {
         wait "$renderer_pid" 2>/dev/null || true
     fi
 
-    for result in "$result_dir"/*.result; do
-        [ -f "$result" ] || continue
-        IFS='|' read -r status in_size out_size rel_path < "$result"
-
-        if [ "$status" = "SUCCESS" ]; then
-            ((count_success++))
-            size_in_total=$(echo "$size_in_total + $in_size" | bc)
-            size_out_total=$(echo "$size_out_total + $out_size" | bc)
-        else
-            ((count_failed++))
-        fi
-    done
+    batch_stats=$(calculate_batch_totals "$result_dir")
+    IFS='|' read -r count_success count_failed size_in_total size_out_total <<< "$batch_stats"
 
     rm -rf "$result_dir"
 

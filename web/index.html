@@ -182,7 +182,35 @@
               <dt>Failed</dt>
               <dd id="batch-failed">0</dd>
             </div>
+            <div>
+              <dt>Total Saved</dt>
+              <dd id="stats-total-saved">0 B</dd>
+            </div>
+            <div>
+              <dt>Total Input</dt>
+              <dd id="stats-total-input">0 B</dd>
+            </div>
+            <div>
+              <dt>Total Output</dt>
+              <dd id="stats-total-output">0 B</dd>
+            </div>
+            <div>
+              <dt>Avg Saved %</dt>
+              <dd id="stats-avg-saved">0.00%</dd>
+            </div>
           </dl>
+
+          <div class="panel-head">
+            <div>
+              <h2>Recent Files</h2>
+              <p class="panel-sub">
+                Latest transcodes with per-file space savings.
+              </p>
+            </div>
+          </div>
+          <div id="recent-files" class="jobs-list empty-state">
+            No files processed yet.
+          </div>
 
           <div class="action-block">
             <button id="rescan-button" class="action-button" type="button">

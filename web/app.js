@@ -13,6 +13,11 @@ const queueEta = document.querySelector("#queue-eta");
 const batchProcessed = document.querySelector("#batch-processed");
 const batchSucceeded = document.querySelector("#batch-succeeded");
 const batchFailed = document.querySelector("#batch-failed");
+const statsTotalSaved = document.querySelector("#stats-total-saved");
+const statsTotalInput = document.querySelector("#stats-total-input");
+const statsTotalOutput = document.querySelector("#stats-total-output");
+const statsAvgSaved = document.querySelector("#stats-avg-saved");
+const recentFiles = document.querySelector("#recent-files");
 const rulesSummary = document.querySelector("#rules-summary");
 const rulesList = document.querySelector("#rules-list");
 const addRuleButton = document.querySelector("#add-rule-button");
@@ -35,6 +40,21 @@ function setFeedback(node, message, kind = "") {
   } else {
     node.classList.add("muted");
   }
+}
+
+function formatBytes(value) {
+  const bytes = Number(value) || 0;
+  const abs = Math.abs(bytes);
+  if (abs >= 1024 ** 3) {
+    return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+  }
+  if (abs >= 1024 ** 2) {
+    return `${(bytes / 1024 ** 2).toFixed(2)} MB`;
+  }
+  if (abs >= 1024) {
+    return `${(bytes / 1024).toFixed(2)} KB`;
+  }
+  return `${bytes} B`;
 }
 
 function renderRules() {
@@ -168,6 +188,41 @@ function renderJobs(jobs) {
     .join("");
 }
 
+function renderRecentFiles(files) {
+  if (!Array.isArray(files) || !files.length) {
+    recentFiles.className = "jobs-list empty-state";
+    recentFiles.textContent = "No files processed yet.";
+    return;
+  }
+
+  recentFiles.className = "jobs-list";
+  recentFiles.innerHTML = files
+    .slice(0, 8)
+    .map((item) => {
+      const path = item.relativePath || "unknown";
+      const savedBytes = Number(item.savedBytes) || 0;
+      const savedPercent = Number(item.savedPercent) || 0;
+      const status = item.status === "failed" ? "Failed" : "Succeeded";
+
+      return `
+      <article class="job-card">
+        <div class="job-head">
+          <div>
+            <p class="job-index">${status}</p>
+            <h3 title="${path}">${path}</h3>
+          </div>
+          <span class="job-speed">${savedPercent.toFixed(2)}%</span>
+        </div>
+        <div class="job-meta">
+          <span>Saved ${formatBytes(savedBytes)}</span>
+          <span>In ${formatBytes(item.inputBytes || 0)} | Out ${formatBytes(item.outputBytes || 0)}</span>
+        </div>
+      </article>
+    `;
+    })
+    .join("");
+}
+
 function applyStatus(data) {
   statePill.textContent = stateLabel(data.state || "unknown");
   statePill.dataset.state = data.state || "unknown";
@@ -183,8 +238,17 @@ function applyStatus(data) {
   batchProcessed.textContent = String(data.batchProcessed ?? 0);
   batchSucceeded.textContent = String(data.batchSucceeded ?? 0);
   batchFailed.textContent = String(data.batchFailed ?? 0);
+
+  const stats = data.stats || {};
+  const totals = stats.totals || {};
+  statsTotalSaved.textContent = formatBytes(totals.savedBytes ?? 0);
+  statsTotalInput.textContent = formatBytes(totals.inputBytes ?? 0);
+  statsTotalOutput.textContent = formatBytes(totals.outputBytes ?? 0);
+  statsAvgSaved.textContent = `${Number(totals.avgSavedPercent ?? 0).toFixed(2)}%`;
+
   rulesSummary.textContent = `${data.rulesCount ?? currentRules.length} active rule${(data.rulesCount ?? currentRules.length) === 1 ? "" : "s"}`;
   renderJobs(data.jobs || []);
+  renderRecentFiles(stats.recentFiles || []);
 }
 
 async function refresh() {
@@ -203,6 +267,8 @@ async function refresh() {
     jobsSummary.textContent = "Waiting for server";
     jobsList.className = "jobs-list empty-state";
     jobsList.textContent = "The admin endpoint is currently unavailable.";
+    recentFiles.className = "jobs-list empty-state";
+    recentFiles.textContent = "The admin endpoint is currently unavailable.";
   }
 }
 
