@@ -440,7 +440,8 @@ process_one_file() {
                     decorated_pct="${c_pct}${pct_display}%${c_reset}"
                 fi
 
-                local progress_line="${log_tag}${decorated_bar} ${decorated_pct} | speed ${speed_display} | t=${elapsed}s | out $(format_bytes_dual "$current_out_live_size")"
+                local progress_head="[ENC $index/$total]"
+                local progress_line="${progress_head} ${decorated_bar} ${decorated_pct} | ${short_name} | speed ${speed_display} | t=${elapsed}s | out $(format_bytes_dual "$current_out_live_size")"
                 if [ -n "$progress_status_file" ]; then
                     printf 'state=run|index=%s|name=%s|pct=%s|speed=%s|elapsed=%s|out=%s\n' "$index" "$short_name" "$pct_display" "$speed_display" "$elapsed" "$current_out_live_size" > "$progress_status_file"
                 elif [ "$can_inline_progress" -eq 1 ]; then
@@ -636,6 +637,58 @@ render_parallel_dashboard() {
     done
 }
 
+emit_parallel_progress_snapshots() {
+    local progress_dir="$1"
+    local stop_file="$2"
+
+    while true; do
+        local status_files=("$progress_dir"/*.status)
+        local summary=""
+
+        if [ -e "${status_files[0]}" ]; then
+            local status_file
+            for status_file in $(ls "$progress_dir"/*.status 2>/dev/null | sort -V); do
+                local line
+                line=$(cat "$status_file" 2>/dev/null)
+                [ -z "$line" ] && continue
+
+                local state="" idx="" pct="0.00" speed="n/a"
+                local part
+                IFS='|' read -r -a fields <<< "$line"
+                for part in "${fields[@]}"; do
+                    case "$part" in
+                        state=*) state="${part#state=}" ;;
+                        index=*) idx="${part#index=}" ;;
+                        pct=*) pct="${part#pct=}" ;;
+                        speed=*) speed="${part#speed=}" ;;
+                    esac
+                done
+
+                [ -z "$idx" ] && continue
+
+                local state_tag="RUN"
+                [ "$state" = "done" ] && state_tag="DONE"
+                [ "$state" = "fail" ] && state_tag="FAIL"
+
+                if [ -n "$summary" ]; then
+                    summary+=" | "
+                fi
+                summary+="#${idx} ${state_tag} ${pct}% @${speed}"
+            done
+        fi
+
+        if [ -n "$summary" ]; then
+            echo "[PROGRESS] $summary"
+        fi
+
+        if [ -f "$stop_file" ]; then
+            break
+        fi
+
+        sleep "$FINAL_HEARTBEAT_SECONDS"
+    done
+}
+
 wait_for_file_stable() {
     local file="$1"
 
@@ -727,6 +780,10 @@ run_batch_once() {
     if [ "$FINAL_PARALLEL_JOBS" -gt 1 ] && [ "$FINAL_LIVE_PREVIEW" -eq 1 ] && [ -t 1 ]; then
         echo "[INFO] Parallel dashboard enabled (${FINAL_PARALLEL_JOBS} jobs)."
         render_parallel_dashboard "$progress_dir" "$progress_stop_file" &
+        renderer_pid=$!
+    elif [ "$FINAL_PARALLEL_JOBS" -gt 1 ] && [ "$FINAL_LIVE_PREVIEW" -eq 1 ]; then
+        echo "[INFO] Parallel snapshot mode enabled for non-interactive logs (${FINAL_PARALLEL_JOBS} jobs)."
+        emit_parallel_progress_snapshots "$progress_dir" "$progress_stop_file" &
         renderer_pid=$!
     fi
 
