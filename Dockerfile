@@ -40,6 +40,7 @@ RUN apt-get update && \
     libva-x11-2 \
     vainfo \
     pciutils \
+    inotify-tools \
     bc \
     curl \
     wget \

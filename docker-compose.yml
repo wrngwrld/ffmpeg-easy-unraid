@@ -2,9 +2,9 @@ services:
   ffmpeg-easy:
     container_name: ffmpeg-easy-unraid
     image: metronade/ffmpeg-easy-unraid:latest
-    
-    # IMPORTANT: Set to "no" because this container stops after processing 
-    # the queue ("Run-Once" workflow). 
+
+    # IMPORTANT: Set to "no" because this container stops after processing
+    # the queue ("Run-Once" workflow).
     # Use "always" only if you want it to restart immediately after finishing (not recommended).
     restart: "no"
 
@@ -14,19 +14,22 @@ services:
 
     environment:
       # --- Configuration ---
-      - ENCODE_METHOD=cpu_h265       # Options: cpu_h265, cpu_av1, nvidia_h265, intel_av1, etc.
-      - ENCODE_PRESET=default        # default, slow, fast, p4, p7...
-      - ENCODE_THREADS=0             # 0 = Auto/Safety Mode, Number = Force specific thread count
-      - ENCODE_CRF=                  # Leave empty for Smart Default (18/24)
-      - ENCODE_CQ=                   # Leave empty for Smart Default (Nvidia)
-      - FFMPEG_CUSTOM_ARGS=          # E.g. "-c:a aac" for audio conversion
+      - ENCODE_METHOD=cpu_h265 # Options: cpu_h265, cpu_av1, nvidia_h265, intel_av1, etc.
+      - ENCODE_PRESET=default # default, slow, fast, p4, p7...
+      - ENCODE_THREADS=0 # 0 = Auto/Safety Mode, Number = Force specific thread count
+      - ENCODE_PARALLEL_JOBS=1 # Number of files processed in parallel
+      - ENCODE_WATCH_MODE=0 # 0 = Run-Once, 1 = Watch folder continuously
+      - ENCODE_WATCH_POLL_SECONDS=30 # Poll fallback interval if inotify is unavailable
+      - ENCODE_CRF= # Leave empty for Smart Default (18/24)
+      - ENCODE_CQ= # Leave empty for Smart Default (Nvidia)
+      - FFMPEG_CUSTOM_ARGS= # E.g. "-c:a aac" for audio conversion
 
       # --- Permissions ---
-      # Standard Linux users are often 1000:1000. 
+      # Standard Linux users are often 1000:1000.
       # On Unraid, it is usually 99:100. Adjust this to match your host file owner!
       - UNRAID_UID=1000
       - UNRAID_GID=1000
-      
+
       # --- Nvidia Environment (Only needed for Nvidia) ---
       # - NVIDIA_VISIBLE_DEVICES=all
       # - NVIDIA_DRIVER_CAPABILITIES=all

@@ -13,6 +13,8 @@ PRESET_INPUT="${ENCODE_PRESET:-default}"
 CUSTOM_ARGS="${FFMPEG_CUSTOM_ARGS:-}"
 MAP_ARGS="${ENCODE_MAP_ARGS:--map 0}"
 PARALLEL_JOBS_INPUT="${ENCODE_PARALLEL_JOBS:-1}"
+WATCH_MODE_INPUT="${ENCODE_WATCH_MODE:-0}"
+WATCH_POLL_SECONDS_INPUT="${ENCODE_WATCH_POLL_SECONDS:-30}"
 
 TARGET_UID="${UNRAID_UID:-99}"
 TARGET_GID="${UNRAID_GID:-100}"
@@ -28,6 +30,8 @@ QP_VALUE=""
 PRESET=""
 FINAL_THREADS=0
 FINAL_PARALLEL_JOBS=1
+FINAL_WATCH_MODE=0
+FINAL_WATCH_POLL_SECONDS=30
 START_TIME=$SECONDS
 SIZE_IN_TOTAL=0
 SIZE_OUT_TOTAL=0
@@ -99,10 +103,27 @@ configure_settings() {
         echo "[WARN] Invalid ENCODE_PARALLEL_JOBS='$PARALLEL_JOBS_INPUT'. Falling back to 1."
         FINAL_PARALLEL_JOBS=1
     fi
+
+    # E) Watch Mode
+    case "${WATCH_MODE_INPUT,,}" in
+        1|true|yes|on) FINAL_WATCH_MODE=1 ;;
+        0|false|no|off|"") FINAL_WATCH_MODE=0 ;;
+        *)
+            echo "[WARN] Invalid ENCODE_WATCH_MODE='$WATCH_MODE_INPUT'. Falling back to 0."
+            FINAL_WATCH_MODE=0
+            ;;
+    esac
+
+    if [[ "$WATCH_POLL_SECONDS_INPUT" =~ ^[0-9]+$ ]] && [ "$WATCH_POLL_SECONDS_INPUT" -ge 5 ]; then
+        FINAL_WATCH_POLL_SECONDS="$WATCH_POLL_SECONDS_INPUT"
+    else
+        echo "[WARN] Invalid ENCODE_WATCH_POLL_SECONDS='$WATCH_POLL_SECONDS_INPUT'. Falling back to 30."
+        FINAL_WATCH_POLL_SECONDS=30
+    fi
 }
 
 check_paths() {
-    echo "[INIT] Method: $METHOD | Preset: $PRESET | CRF/CQ: $CRF_VALUE/$CQ_VALUE | Parallel Jobs: $FINAL_PARALLEL_JOBS"
+    echo "[INIT] Method: $METHOD | Preset: $PRESET | CRF/CQ: $CRF_VALUE/$CQ_VALUE | Parallel Jobs: $FINAL_PARALLEL_JOBS | Watch Mode: $FINAL_WATCH_MODE"
     if [ ! -d "$SOURCE_DIR" ]; then echo "[FATAL] /import missing."; exit 1; fi
 
     local r_src; r_src=$(realpath "$SOURCE_DIR")
@@ -298,6 +319,113 @@ format_bytes_dual() {
     echo "${gb} GB | ${mb} MB"
 }
 
+scan_files() {
+    local files=()
+    while IFS= read -r -d '' file; do
+        files+=("$file")
+    done < <(find "$SOURCE_DIR" -path "$FINISHED_DIR" -prune -o -type f \( -iname "*.mkv" -o -iname "*.mp4" -o -iname "*.ts" -o -iname "*.m2ts" -o -iname "*.avi" -o -iname "*.mov" -o -iname "*.wmv" \) -print0)
+
+    printf '%s\0' "${files[@]}"
+}
+
+wait_for_new_files() {
+    if command -v inotifywait >/dev/null 2>&1; then
+        echo "[WATCH] Waiting for new files in '$SOURCE_DIR' (inotify)..."
+        inotifywait -qq -r -e create -e close_write -e moved_to --exclude '/finished(/|$)' "$SOURCE_DIR" || true
+    else
+        echo "[WATCH] inotifywait not found. Polling every $FINAL_WATCH_POLL_SECONDS seconds..."
+        sleep "$FINAL_WATCH_POLL_SECONDS"
+    fi
+}
+
+run_batch_once() {
+    local files=()
+    while IFS= read -r -d '' file; do
+        files+=("$file")
+    done < <(scan_files)
+
+    local total_files=${#files[@]}
+
+    if [ "$total_files" -eq 0 ]; then
+        echo "[INFO] No files found."
+        return 0
+    fi
+
+    echo "[INFO] Found $total_files files to process."
+    echo "--------------------------------------------------------"
+
+    local count_success=0
+    local count_failed=0
+    local current_index=0
+    local size_in_total=0
+    local size_out_total=0
+    local result_dir
+    local batch_start=$SECONDS
+    result_dir=$(mktemp -d /tmp/ffmpeg-easy-results.XXXXXX)
+
+    for input_file in "${files[@]}"; do
+        ((current_index++))
+        if [ "$FINAL_PARALLEL_JOBS" -le 1 ]; then
+            process_one_file "$input_file" "$current_index" "$total_files" "$result_dir/$current_index.result"
+        else
+            process_one_file "$input_file" "$current_index" "$total_files" "$result_dir/$current_index.result" &
+            while [ "$(jobs -rp | wc -l)" -ge "$FINAL_PARALLEL_JOBS" ]; do
+                wait -n
+            done
+        fi
+    done
+
+    if [ "$FINAL_PARALLEL_JOBS" -gt 1 ]; then
+        wait
+    fi
+
+    for result in "$result_dir"/*.result; do
+        [ -f "$result" ] || continue
+        IFS='|' read -r status in_size out_size rel_path < "$result"
+
+        if [ "$status" = "SUCCESS" ]; then
+            ((count_success++))
+            size_in_total=$(echo "$size_in_total + $in_size" | bc)
+            size_out_total=$(echo "$size_out_total + $out_size" | bc)
+        else
+            ((count_failed++))
+        fi
+    done
+
+    rm -rf "$result_dir"
+
+    local duration=$((SECONDS - batch_start))
+    local h=$((duration/3600))
+    local m=$(((duration%3600)/60))
+    local s=$((duration%60))
+
+    echo ""
+    echo "========================================================"
+    echo " FINAL STATISTICS"
+    echo "========================================================"
+    echo " Processed:  $count_success (Failed: $count_failed)"
+    echo " Runtime:    ${h}h ${m}m ${s}s"
+    if [ $count_success -gt 0 ]; then
+        local txt_in txt_out txt_diff percent
+        txt_in=$(format_bytes_dual "$size_in_total")
+        txt_out=$(format_bytes_dual "$size_out_total")
+        txt_diff=$(awk -v i="$size_in_total" -v o="$size_out_total" 'BEGIN {
+            diff = i - o;
+            gb = diff / 1073741824;
+            mb = diff / 1048576;
+            printf "%.2f GB | %.2f MB", gb, mb
+        }')
+        percent=$(awk "BEGIN {printf \"%.2f\", (($size_in_total-$size_out_total)/$size_in_total)*100}")
+
+        echo " Input:      $txt_in"
+        echo " Output:     $txt_out"
+        echo " Saved:      $txt_diff ($percent%)"
+    fi
+    echo "========================================================"
+
+    return 0
+}
+
 # ==============================================================================
 # MAIN
 # ==============================================================================
@@ -309,80 +437,14 @@ check_hardware
 echo "--------------------------------------------------------"
 echo "[INFO] Scanning '/import' for video files... Please wait."
 
-FILES=()
-while IFS= read -r -d '' file; do
-    FILES+=("$file")
-done < <(find "$SOURCE_DIR" -path "$FINISHED_DIR" -prune -o -type f \( -iname "*.mkv" -o -iname "*.mp4" -o -iname "*.ts" -o -iname "*.m2ts" -o -iname "*.avi" -o -iname "*.mov" -o -iname "*.wmv" \) -print0)
-
-TOTAL_FILES=${#FILES[@]}
-
-if [ "$TOTAL_FILES" -eq 0 ]; then
-    echo "[INFO] No files found. Exiting."
-    exit 0
+if [ "$FINAL_WATCH_MODE" -eq 1 ]; then
+    echo "[WATCH] Continuous mode enabled."
+    while true; do
+        run_batch_once
+        wait_for_new_files
+    done
+else
+    run_batch_once
 fi
 
-echo "[INFO] Found $TOTAL_FILES files to process."
-echo "--------------------------------------------------------"
-
-COUNT_SUCCESS=0; COUNT_FAILED=0
-CURRENT_INDEX=0
-RESULT_DIR=$(mktemp -d /tmp/ffmpeg-easy-results.XXXXXX)
-
-for input_file in "${FILES[@]}"; do
-    ((CURRENT_INDEX++))
-    if [ "$FINAL_PARALLEL_JOBS" -le 1 ]; then
-        process_one_file "$input_file" "$CURRENT_INDEX" "$TOTAL_FILES" "$RESULT_DIR/$CURRENT_INDEX.result"
-    else
-        process_one_file "$input_file" "$CURRENT_INDEX" "$TOTAL_FILES" "$RESULT_DIR/$CURRENT_INDEX.result" &
-        while [ "$(jobs -rp | wc -l)" -ge "$FINAL_PARALLEL_JOBS" ]; do
-            wait -n
-        done
-    fi
-done
-
-if [ "$FINAL_PARALLEL_JOBS" -gt 1 ]; then
-    wait
-fi
-
-for result in "$RESULT_DIR"/*.result; do
-    [ -f "$result" ] || continue
-    IFS='|' read -r status in_size out_size rel_path < "$result"
-
-    if [ "$status" = "SUCCESS" ]; then
-        ((COUNT_SUCCESS++))
-        SIZE_IN_TOTAL=$(echo "$SIZE_IN_TOTAL + $in_size" | bc)
-        SIZE_OUT_TOTAL=$(echo "$SIZE_OUT_TOTAL + $out_size" | bc)
-    else
-        ((COUNT_FAILED++))
-    fi
-done
-
-rm -rf "$RESULT_DIR"
-
-DURATION=$((SECONDS - START_TIME))
-H=$((DURATION/3600)); M=$(( (DURATION%3600)/60 )); S=$((DURATION%60))
-
-echo ""
-echo "========================================================"
-echo " FINAL STATISTICS"
-echo "========================================================"
-echo " Processed:  $COUNT_SUCCESS (Failed: $COUNT_FAILED)"
-echo " Runtime:    ${H}h ${M}m ${S}s"
-if [ $COUNT_SUCCESS -gt 0 ]; then
-    TXT_IN=$(format_bytes_dual $SIZE_IN_TOTAL)
-    TXT_OUT=$(format_bytes_dual $SIZE_OUT_TOTAL)
-    # Use awk for diff calculation as well to handle negatives cleanly with leading zeros
-    TXT_DIFF=$(awk -v i="$SIZE_IN_TOTAL" -v o="$SIZE_OUT_TOTAL" 'BEGIN { 
-        diff = i - o; 
-        gb = diff / 1073741824; 
-        mb = diff / 1048576; 
-        printf "%.2f GB | %.2f MB", gb, mb 
-    }')
-    PERCENT=$(awk "BEGIN {printf \"%.2f\", (($SIZE_IN_TOTAL-$SIZE_OUT_TOTAL)/$SIZE_IN_TOTAL)*100}")
-    
-    echo " Input:      $TXT_IN"
-    echo " Output:     $TXT_OUT"
-    echo " Saved:      $TXT_DIFF ($PERCENT%)"
-fi
-echo "========================================================"
 exit 0
