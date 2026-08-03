@@ -24,6 +24,8 @@ TARGET_GID="${UNRAID_GID:-100}"
 SOURCE_DIR="/import"
 EXPORT_DIR="/export"
 FINISHED_DIR="$SOURCE_DIR/finished"
+ADMIN_CONFIG_DIR="$EXPORT_DIR/.ffmpeg-easy-admin"
+ADMIN_RULES_FILE="$ADMIN_CONFIG_DIR/rules.json"
 ADMIN_STATE_DIR="/tmp/ffmpeg-easy-admin"
 ADMIN_PROGRESS_DIR="$ADMIN_STATE_DIR/progress"
 ADMIN_STATUS_FILE="$ADMIN_STATE_DIR/status.json"
@@ -51,6 +53,50 @@ admin_json_escape() {
 admin_init_runtime() {
     mkdir -p "$ADMIN_PROGRESS_DIR"
     rm -f "$ADMIN_PROGRESS_DIR"/*.status "$ADMIN_STATE_DIR"/progress.stop
+}
+
+get_effective_qp_for_path() {
+    local rel_path="$1"
+
+    if [ ! -f "$ADMIN_RULES_FILE" ]; then
+        printf '%s\n' "$QP_VALUE"
+        return
+    fi
+
+    python3 - "$ADMIN_RULES_FILE" "$rel_path" "$QP_VALUE" <<'PY'
+import json
+import sys
+from pathlib import PurePosixPath
+
+rules_file = sys.argv[1]
+relative_path = PurePosixPath(sys.argv[2].lstrip("/"))
+default_qp = sys.argv[3]
+
+try:
+    with open(rules_file, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+except (OSError, json.JSONDecodeError):
+    print(default_qp)
+    raise SystemExit(0)
+
+rules = payload.get("rules", []) if isinstance(payload, dict) else []
+
+for rule in rules:
+    if not isinstance(rule, dict):
+        continue
+
+    prefix = str(rule.get("pathPrefix", "")).strip().strip("/")
+    qp = rule.get("qp")
+    if not prefix or not isinstance(qp, int):
+        continue
+
+    prefix_path = PurePosixPath(prefix)
+    if relative_path == prefix_path or prefix_path in relative_path.parents:
+        print(qp)
+        raise SystemExit(0)
+
+print(default_qp)
+PY
 }
 
 admin_write_status() {
@@ -164,6 +210,7 @@ check_paths() {
     
     mkdir -p "$EXPORT_DIR"
     mkdir -p "$FINISHED_DIR"
+    mkdir -p "$ADMIN_CONFIG_DIR"
     chown "$TARGET_UID":"$TARGET_GID" "$FINISHED_DIR"
     admin_init_runtime
     admin_write_status "starting" "Container initialized" 0 0 0 0
@@ -232,6 +279,7 @@ get_ffmpeg_cmd() {
     local hdr_primaries="$5"
     local hdr_colorspace="$6"
     local source_color_range="$7"
+    local qp_override="${8:-$QP_VALUE}"
     local cmd_prefix=(ffmpeg -hide_banner -y)
     local audio_sub_args="${CUSTOM_ARGS:--c:a copy -c:s copy}"
     
@@ -260,7 +308,7 @@ get_ffmpeg_cmd() {
     local intel_color_args="$intel_sdr_args"
     [ "$hdr_flag" -eq 1 ] && intel_color_args="$intel_hdr_args"
 
-    local intel_rate_args="-qp $QP_VALUE"
+    local intel_rate_args="-qp $qp_override"
 
     echo "${cmd_prefix[@]} -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -vaapi_device /dev/dri/renderD128 -i \"$input\" $MAP_ARGS -vf \"$intel_filter\" -c:v hevc_vaapi $intel_color_args $intel_rate_args $audio_sub_args \"$output\""
 }
@@ -316,13 +364,18 @@ process_one_file() {
     local IS_HDR HDR_TRANSFER HDR_PRIMARIES HDR_COLORSPACE SRC_COLOR_RANGE
     IFS='|' read -r IS_HDR HDR_TRANSFER HDR_PRIMARIES HDR_COLORSPACE SRC_COLOR_RANGE <<< "$VIDEO_META"
     local log_tag="[ENC $index/$total $fname_no_ext] "
+    local effective_qp
+    effective_qp=$(get_effective_qp_for_path "$rel_path")
 
     if [ "$IS_HDR" -eq 1 ]; then
         echo "[INFO] HDR source detected (transfer=$HDR_TRANSFER, primaries=$HDR_PRIMARIES, colorspace=$HDR_COLORSPACE). Preserving HDR signaling."
     fi
+    if [ "$effective_qp" != "$QP_VALUE" ]; then
+        echo "${log_tag}Using folder QP override: ${effective_qp}"
+    fi
     
     local CMD_STR
-    CMD_STR=$(get_ffmpeg_cmd "$input_file" "$out_file" "$IS_HDR" "$HDR_TRANSFER" "$HDR_PRIMARIES" "$HDR_COLORSPACE" "$SRC_COLOR_RANGE")
+    CMD_STR=$(get_ffmpeg_cmd "$input_file" "$out_file" "$IS_HDR" "$HDR_TRANSFER" "$HDR_PRIMARIES" "$HDR_COLORSPACE" "$SRC_COLOR_RANGE" "$effective_qp")
 
     local ff_ret=0
     local ff_err_log=""

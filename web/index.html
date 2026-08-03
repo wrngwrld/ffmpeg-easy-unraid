@@ -167,6 +167,10 @@
               <dd id="batch-total">0</dd>
             </div>
             <div>
+              <dt>Queue ETA</dt>
+              <dd id="queue-eta">Estimating…</dd>
+            </div>
+            <div>
               <dt>Processed</dt>
               <dd id="batch-processed">0</dd>
             </div>
@@ -179,7 +183,47 @@
               <dd id="batch-failed">0</dd>
             </div>
           </dl>
+
+          <div class="action-block">
+            <button id="rescan-button" class="action-button" type="button">
+              Rescan Now
+            </button>
+            <p id="action-feedback" class="action-feedback muted">
+              Wake the watcher immediately when new files were copied into
+              /import.
+            </p>
+          </div>
         </article>
+      </section>
+
+      <section class="panel rules-panel" id="rules">
+        <div class="panel-head">
+          <div>
+            <div class="tag small-tag">
+              <span class="tag-dot"></span>Folder Rules
+            </div>
+            <h2>Per-Folder QP Overrides</h2>
+            <p class="panel-sub">
+              Match a folder prefix under /import and apply a different QP for
+              everything inside it.
+            </p>
+          </div>
+          <p id="rules-summary" class="muted">0 active rules</p>
+        </div>
+
+        <div id="rules-list" class="rules-list"></div>
+
+        <div class="rules-actions">
+          <button id="add-rule-button" class="ghost-button" type="button">
+            Add Rule
+          </button>
+          <button id="save-rules-button" class="action-button" type="button">
+            Save Rules
+          </button>
+        </div>
+        <p id="rules-feedback" class="action-feedback muted">
+          Example prefix: Anime/Season 1 or Movies/4K
+        </p>
       </section>
     </main>
     <script src="/app.js"></script>

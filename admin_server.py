@@ -3,6 +3,7 @@ import json
 import os
 import posixpath
 import re
+from statistics import mean
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -15,6 +16,9 @@ STATUS_FILE = STATE_DIR / "status.json"
 PROGRESS_DIR = STATE_DIR / "progress"
 IMPORT_DIR = Path("/import")
 FINISHED_DIR = IMPORT_DIR / "finished"
+CONFIG_DIR = Path("/export/.ffmpeg-easy-admin")
+RULES_FILE = CONFIG_DIR / "rules.json"
+RESCAN_TRIGGER = IMPORT_DIR / ".ffmpeg-easy-rescan.trigger"
 MEDIA_EXTENSIONS = {".mkv", ".mp4", ".ts", ".m2ts", ".avi", ".mov", ".wmv"}
 
 
@@ -41,6 +45,62 @@ def natural_sort_key(value: str):
     return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", value)]
 
 
+def default_rules_payload() -> dict:
+    return {"rules": []}
+
+
+def read_rules() -> dict:
+    if RULES_FILE.exists():
+        try:
+            payload = json.loads(RULES_FILE.read_text(encoding="utf-8"))
+            if isinstance(payload, dict) and isinstance(payload.get("rules", []), list):
+                return payload
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    return default_rules_payload()
+
+
+def sanitize_rules(payload: dict) -> dict:
+    raw_rules = payload.get("rules", []) if isinstance(payload, dict) else []
+    sanitized = []
+
+    for rule in raw_rules:
+        if not isinstance(rule, dict):
+            continue
+
+        path_prefix = str(rule.get("pathPrefix", "")).strip().strip("/")
+        qp = rule.get("qp")
+        if not path_prefix:
+            continue
+
+        try:
+            qp_value = int(qp)
+        except (TypeError, ValueError):
+            continue
+
+        if qp_value < 0 or qp_value > 51:
+            continue
+
+        sanitized.append({"pathPrefix": path_prefix, "qp": qp_value})
+
+    return {"rules": sanitized}
+
+
+def write_rules(payload: dict) -> dict:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    sanitized = sanitize_rules(payload)
+    RULES_FILE.write_text(json.dumps(sanitized, indent=2), encoding="utf-8")
+    return sanitized
+
+
+def write_rescan_trigger() -> None:
+    if not IMPORT_DIR.exists():
+        raise FileNotFoundError("Import directory does not exist")
+
+    RESCAN_TRIGGER.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+
+
 def count_queue_files() -> int:
     if not IMPORT_DIR.exists():
         return 0
@@ -57,6 +117,68 @@ def count_queue_files() -> int:
             if Path(name).suffix.lower() in MEDIA_EXTENSIONS:
                 total += 1
     return total
+
+
+def format_duration(seconds: float | None) -> str:
+    if seconds is None:
+        return "Estimating…"
+
+    seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+
+    if hours > 0:
+        return f"{hours}h {minutes:02d}m"
+    if minutes > 0:
+        return f"{minutes}m {secs:02d}s"
+    return f"{secs}s"
+
+
+def estimate_queue_remaining(queue_count: int, jobs: list[dict], parallel_jobs: int) -> float | None:
+    active_jobs = [job for job in jobs if job.get("state") == "run"]
+    if queue_count <= 0 and not active_jobs:
+        return 0.0
+
+    slot_times: list[float] = []
+    total_durations: list[float] = []
+    unresolved_jobs = 0
+
+    for job in active_jobs:
+        try:
+            pct = float(job.get("pct", "0"))
+            elapsed = int(float(job.get("elapsed", "0")))
+        except (TypeError, ValueError):
+            unresolved_jobs += 1
+            continue
+
+        if pct > 0 and elapsed >= 0:
+            total_duration = elapsed / (pct / 100.0)
+            remaining = max(total_duration - elapsed, 0.0)
+            total_durations.append(total_duration)
+            slot_times.append(remaining)
+        else:
+            unresolved_jobs += 1
+
+    avg_total_duration = mean(total_durations) if total_durations else None
+
+    if unresolved_jobs:
+        if avg_total_duration is None:
+            return None
+        slot_times.extend([avg_total_duration] * unresolved_jobs)
+
+    worker_slots = max(parallel_jobs, len(slot_times), 1)
+    while len(slot_times) < worker_slots:
+        slot_times.append(0.0)
+
+    waiting_jobs = max(0, queue_count - len(active_jobs))
+    if waiting_jobs > 0:
+        if avg_total_duration is None:
+            return None
+        for _ in range(waiting_jobs):
+            next_slot = min(range(len(slot_times)), key=slot_times.__getitem__)
+            slot_times[next_slot] += avg_total_duration
+
+    return max(slot_times) if slot_times else 0.0
 
 
 def read_status() -> dict:
@@ -121,6 +243,22 @@ def read_jobs() -> list[dict]:
 
 
 class AdminHandler(SimpleHTTPRequestHandler):
+    def read_json_body(self) -> dict:
+        length = int(self.headers.get("Content-Length", "0"))
+        raw_body = self.rfile.read(length) if length > 0 else b"{}"
+        if not raw_body:
+            return {}
+        return json.loads(raw_body.decode("utf-8"))
+
+    def send_json(self, payload: dict, status: int = HTTPStatus.OK):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def translate_path(self, path: str) -> str:
         path = path.split("?", 1)[0].split("#", 1)[0]
         normalized = posixpath.normpath(path)
@@ -133,17 +271,22 @@ class AdminHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/api/status"):
             payload = read_status()
-            payload["queueCount"] = count_queue_files()
-            payload["jobs"] = read_jobs()
-            payload["servedAt"] = datetime.now(timezone.utc).isoformat()
+            queue_count = count_queue_files()
+            jobs = read_jobs()
+            parallel_jobs = int(payload.get("parallelJobs", 1) or 1)
+            queue_eta_seconds = estimate_queue_remaining(queue_count, jobs, parallel_jobs)
 
-            body = json.dumps(payload).encode("utf-8")
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            payload["queueCount"] = queue_count
+            payload["jobs"] = jobs
+            payload["queueEtaSeconds"] = None if queue_eta_seconds is None else int(round(queue_eta_seconds))
+            payload["queueEtaLabel"] = format_duration(queue_eta_seconds)
+            payload["rulesCount"] = len(read_rules().get("rules", []))
+            payload["servedAt"] = datetime.now(timezone.utc).isoformat()
+            self.send_json(payload)
+            return
+
+        if self.path.startswith("/api/rules"):
+            self.send_json(read_rules())
             return
 
         if self.path in {"/", ""}:
@@ -151,12 +294,39 @@ class AdminHandler(SimpleHTTPRequestHandler):
 
         return super().do_GET()
 
+    def do_POST(self):
+        if self.path == "/api/rules":
+            try:
+                payload = self.read_json_body()
+            except json.JSONDecodeError:
+                self.send_json({"error": "Invalid JSON payload"}, HTTPStatus.BAD_REQUEST)
+                return
+
+            saved = write_rules(payload)
+            self.send_json(saved)
+            return
+
+        if self.path == "/api/actions/rescan":
+            try:
+                write_rescan_trigger()
+            except OSError as exc:
+                self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+
+            self.send_json({"ok": True, "message": "Rescan trigger written"})
+            return
+
+        self.send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
+
     def log_message(self, fmt: str, *args):
         return
 
 
 def main() -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    if not RULES_FILE.exists():
+        write_rules(default_rules_payload())
     with ThreadingHTTPServer(("0.0.0.0", PORT), AdminHandler) as httpd:
         httpd.serve_forever()
 

@@ -9,12 +9,124 @@ const jobsList = document.querySelector("#jobs-list");
 const statusMessage = document.querySelector("#status-message");
 const statusMethod = document.querySelector("#status-method");
 const batchTotal = document.querySelector("#batch-total");
+const queueEta = document.querySelector("#queue-eta");
 const batchProcessed = document.querySelector("#batch-processed");
 const batchSucceeded = document.querySelector("#batch-succeeded");
 const batchFailed = document.querySelector("#batch-failed");
+const rulesSummary = document.querySelector("#rules-summary");
+const rulesList = document.querySelector("#rules-list");
+const addRuleButton = document.querySelector("#add-rule-button");
+const saveRulesButton = document.querySelector("#save-rules-button");
+const rulesFeedback = document.querySelector("#rules-feedback");
+const rescanButton = document.querySelector("#rescan-button");
+const actionFeedback = document.querySelector("#action-feedback");
+
+let currentRules = [];
 
 function stateLabel(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function setFeedback(node, message, kind = "") {
+  node.textContent = message;
+  node.className = "action-feedback";
+  if (kind) {
+    node.classList.add(kind);
+  } else {
+    node.classList.add("muted");
+  }
+}
+
+function renderRules() {
+  rulesSummary.textContent = `${currentRules.length} active rule${currentRules.length === 1 ? "" : "s"}`;
+
+  if (!currentRules.length) {
+    rulesList.innerHTML =
+      '<div class="empty-state">No folder-specific QP rules yet.</div>';
+    return;
+  }
+
+  rulesList.innerHTML = currentRules
+    .map(
+      (rule, index) => `
+      <div class="rule-row" data-index="${index}">
+        <input class="rule-input" type="text" placeholder="Anime/Season 1" value="${rule.pathPrefix || ""}" />
+        <input class="rule-number" type="number" min="0" max="51" step="1" value="${rule.qp ?? 22}" />
+        <button class="rule-remove" type="button">Remove</button>
+      </div>
+    `,
+    )
+    .join("");
+}
+
+function syncRulesFromDom() {
+  currentRules = Array.from(document.querySelectorAll(".rule-row"))
+    .map((row) => {
+      const pathPrefix = row.querySelector(".rule-input").value.trim();
+      const qp = Number.parseInt(row.querySelector(".rule-number").value, 10);
+      return { pathPrefix, qp };
+    })
+    .filter((rule) => rule.pathPrefix && Number.isInteger(rule.qp));
+}
+
+async function loadRules() {
+  const response = await fetch("/api/rules", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  const payload = await response.json();
+  currentRules = Array.isArray(payload.rules) ? payload.rules : [];
+  renderRules();
+}
+
+async function saveRules() {
+  syncRulesFromDom();
+  saveRulesButton.disabled = true;
+  setFeedback(rulesFeedback, "Saving rules…");
+
+  try {
+    const response = await fetch("/api/rules", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rules: currentRules }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const payload = await response.json();
+    currentRules = Array.isArray(payload.rules) ? payload.rules : [];
+    renderRules();
+    setFeedback(rulesFeedback, "Rules saved.", "success");
+  } catch (error) {
+    setFeedback(rulesFeedback, "Failed to save rules.", "error");
+  } finally {
+    saveRulesButton.disabled = false;
+  }
+}
+
+async function triggerRescan() {
+  rescanButton.disabled = true;
+  setFeedback(actionFeedback, "Triggering rescan…");
+
+  try {
+    const response = await fetch("/api/actions/rescan", { method: "POST" });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    setFeedback(
+      actionFeedback,
+      "Rescan trigger written. The watcher should wake immediately.",
+      "success",
+    );
+  } catch (error) {
+    setFeedback(actionFeedback, "Failed to trigger rescan.", "error");
+  } finally {
+    rescanButton.disabled = false;
+  }
 }
 
 function renderJobs(jobs) {
@@ -67,9 +179,11 @@ function applyStatus(data) {
   statusMessage.textContent = data.message || "No message";
   statusMethod.textContent = data.method || "intel_h265";
   batchTotal.textContent = String(data.batchTotal ?? 0);
+  queueEta.textContent = data.queueEtaLabel || "Estimating…";
   batchProcessed.textContent = String(data.batchProcessed ?? 0);
   batchSucceeded.textContent = String(data.batchSucceeded ?? 0);
   batchFailed.textContent = String(data.batchFailed ?? 0);
+  rulesSummary.textContent = `${data.rulesCount ?? currentRules.length} active rule${(data.rulesCount ?? currentRules.length) === 1 ? "" : "s"}`;
   renderJobs(data.jobs || []);
 }
 
@@ -92,5 +206,39 @@ async function refresh() {
   }
 }
 
+rulesList.addEventListener("click", (event) => {
+  if (
+    !(event.target instanceof HTMLElement) ||
+    !event.target.classList.contains("rule-remove")
+  ) {
+    return;
+  }
+
+  const row = event.target.closest(".rule-row");
+  if (!row) {
+    return;
+  }
+
+  row.remove();
+  syncRulesFromDom();
+  renderRules();
+});
+
+addRuleButton.addEventListener("click", () => {
+  currentRules.push({ pathPrefix: "", qp: 22 });
+  renderRules();
+});
+
+saveRulesButton.addEventListener("click", () => {
+  saveRules();
+});
+
+rescanButton.addEventListener("click", () => {
+  triggerRescan();
+});
+
 refresh();
 setInterval(refresh, 2000);
+loadRules().catch(() => {
+  setFeedback(rulesFeedback, "Failed to load rules.", "error");
+});
