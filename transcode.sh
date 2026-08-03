@@ -15,6 +15,7 @@ MAP_ARGS="${ENCODE_MAP_ARGS:--map 0}"
 PARALLEL_JOBS_INPUT="${ENCODE_PARALLEL_JOBS:-1}"
 WATCH_MODE_INPUT="${ENCODE_WATCH_MODE:-0}"
 WATCH_POLL_SECONDS_INPUT="${ENCODE_WATCH_POLL_SECONDS:-30}"
+FILE_STABLE_SECONDS_INPUT="${ENCODE_FILE_STABLE_SECONDS:-5}"
 
 TARGET_UID="${UNRAID_UID:-99}"
 TARGET_GID="${UNRAID_GID:-100}"
@@ -32,6 +33,7 @@ FINAL_THREADS=0
 FINAL_PARALLEL_JOBS=1
 FINAL_WATCH_MODE=0
 FINAL_WATCH_POLL_SECONDS=30
+FINAL_FILE_STABLE_SECONDS=5
 START_TIME=$SECONDS
 SIZE_IN_TOTAL=0
 SIZE_OUT_TOTAL=0
@@ -120,10 +122,18 @@ configure_settings() {
         echo "[WARN] Invalid ENCODE_WATCH_POLL_SECONDS='$WATCH_POLL_SECONDS_INPUT'. Falling back to 30."
         FINAL_WATCH_POLL_SECONDS=30
     fi
+
+    # F) File Stability Gate (seconds with unchanged size before processing)
+    if [[ "$FILE_STABLE_SECONDS_INPUT" =~ ^[0-9]+$ ]]; then
+        FINAL_FILE_STABLE_SECONDS="$FILE_STABLE_SECONDS_INPUT"
+    else
+        echo "[WARN] Invalid ENCODE_FILE_STABLE_SECONDS='$FILE_STABLE_SECONDS_INPUT'. Falling back to 5."
+        FINAL_FILE_STABLE_SECONDS=5
+    fi
 }
 
 check_paths() {
-    echo "[INIT] Method: $METHOD | Preset: $PRESET | CRF/CQ: $CRF_VALUE/$CQ_VALUE | Parallel Jobs: $FINAL_PARALLEL_JOBS | Watch Mode: $FINAL_WATCH_MODE"
+    echo "[INIT] Method: $METHOD | Preset: $PRESET | CRF/CQ: $CRF_VALUE/$CQ_VALUE | Parallel Jobs: $FINAL_PARALLEL_JOBS | Watch Mode: $FINAL_WATCH_MODE | Stable Seconds: $FINAL_FILE_STABLE_SECONDS"
     if [ ! -d "$SOURCE_DIR" ]; then echo "[FATAL] /import missing."; exit 1; fi
 
     local r_src; r_src=$(realpath "$SOURCE_DIR")
@@ -268,6 +278,12 @@ process_one_file() {
     chown "$TARGET_UID":"$TARGET_GID" "$(dirname "$out_file")"
     [ -f "$out_file" ] && rm "$out_file"
 
+    if ! wait_for_file_stable "$input_file"; then
+        echo "[FAIL] Source became unavailable while waiting for stable copy: $rel_path"
+        printf 'FAIL|0|0|%s\n' "$rel_path" > "$result_file"
+        return
+    fi
+
     local current_in_size
     current_in_size=$(stat -c%s "$input_file")
 
@@ -319,6 +335,44 @@ format_bytes_dual() {
     echo "${gb} GB | ${mb} MB"
 }
 
+wait_for_file_stable() {
+    local file="$1"
+
+    if [ "$FINAL_FILE_STABLE_SECONDS" -le 0 ]; then
+        return 0
+    fi
+
+    local stable_count=0
+    local last_size=""
+    local current_size=""
+
+    echo "[WATCH] Waiting for stable file: $(basename -- "$file") (${FINAL_FILE_STABLE_SECONDS}s unchanged size)"
+
+    while true; do
+        if [ ! -f "$file" ]; then
+            return 1
+        fi
+
+        current_size=$(stat -c%s "$file" 2>/dev/null || true)
+        if [ -z "$current_size" ]; then
+            return 1
+        fi
+
+        if [ "$current_size" = "$last_size" ]; then
+            ((stable_count++))
+        else
+            stable_count=0
+            last_size="$current_size"
+        fi
+
+        if [ "$stable_count" -ge "$FINAL_FILE_STABLE_SECONDS" ]; then
+            return 0
+        fi
+
+        sleep 1
+    done
+}
+
 scan_files() {
     local files=()
     while IFS= read -r -d '' file; do
@@ -331,7 +385,8 @@ scan_files() {
 wait_for_new_files() {
     if command -v inotifywait >/dev/null 2>&1; then
         echo "[WATCH] Waiting for new files in '$SOURCE_DIR' (inotify)..."
-        inotifywait -qq -r -e create -e close_write -e moved_to --exclude '/finished(/|$)' "$SOURCE_DIR" || true
+        # Trigger only when a write is closed or a fully written file is moved into place.
+        inotifywait -qq -r -e close_write -e moved_to --exclude '/finished(/|$)' "$SOURCE_DIR" || true
     else
         echo "[WATCH] inotifywait not found. Polling every $FINAL_WATCH_POLL_SECONDS seconds..."
         sleep "$FINAL_WATCH_POLL_SECONDS"

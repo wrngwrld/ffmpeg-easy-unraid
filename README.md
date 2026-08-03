@@ -96,21 +96,22 @@ The container is controlled via Environment Variables.
 
 ### Variable List
 
-| Variable                    | Default    | Description                                                                                                                                                                                       |
-| :-------------------------- | :--------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ENCODE_METHOD`             | `cpu_h265` | **The Encoder Engine.**<br>Options: `cpu_h265`, `cpu_av1`, `nvidia_h265`, `nvidia_av1`, `intel_h265`, `intel_av1`.                                                                                |
-| `ENCODE_PRESET`             | `default`  | **Speed vs. Efficiency.**<br>`default` automatically picks `medium` (CPU) or `p4` (Nvidia).<br>Manual options: `slow`, `fast`, `p1`-`p7` (Nvidia), `0`-`13` (SVT-AV1).                            |
-| `ENCODE_THREADS`            | `0`        | **CPU Usage.**<br>`0` = Auto-Detect (Checks for pinning).<br>Set a number (e.g., `4`) to force a specific thread count. Only affects CPU encoding.                                                |
-| `ENCODE_PARALLEL_JOBS`      | `1`        | **Files in Parallel.**<br>How many files to transcode at the same time.<br>`1` = sequential (default).<br>Recommended: `2` for GPU methods, `1` for CPU methods unless you have many spare cores. |
-| `ENCODE_WATCH_MODE`         | `0`        | **Continuous Folder Watch.**<br>`0` = Run once and stop.<br>`1` = Keep container running and automatically process new files when they are copied into `/import`.                                 |
-| `ENCODE_WATCH_POLL_SECONDS` | `30`       | **Watch Fallback Interval.**<br>Used only if inotify is unavailable inside the container.<br>Minimum valid value: `5`.                                                                            |
-| `ENCODE_CRF`                | _(Smart)_  | **Quality for CPU/Intel.**<br>Lower value = Better Quality, Larger File.<br>Defaults: `18` (H.265), `24` (AV1).                                                                                   |
-| `ENCODE_CQ`                 | _(Smart)_  | **Quality for Nvidia.**<br>Lower value = Better Quality, Larger File.<br>Defaults: `19` (H.265), `24` (AV1).                                                                                      |
-| `ENCODE_MAP_ARGS`           | `-map 0`   | **Stream Selection.**<br>Default maps all streams (video, all audio tracks, subtitles, attachments).<br>Example for smaller files: `-map 0:v:0 -map 0:a:0` (first video + first audio only).      |
-| `FFMPEG_CUSTOM_ARGS`        | _(Empty)_  | **Audio/Subtitles Override.**<br>Default behavior is `-c:a copy -c:s copy`.<br>Use this to convert audio, e.g., `-c:a aac -b:a 192k`.                                                             |
-| `NVIDIA_VISIBLE_DEVICES`    | `all`      | **GPU Selection.**<br>Set to your GPU UUID (e.g., `GPU-xxxx...`) or `all`.                                                                                                                        |
-| `UNRAID_UID`                | `99`       | User ID for file permissions (Standard Unraid: 99).                                                                                                                                               |
-| `UNRAID_GID`                | `100`      | Group ID for file permissions (Standard Unraid: 100).                                                                                                                                             |
+| Variable                     | Default    | Description                                                                                                                                                                                       |
+| :--------------------------- | :--------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ENCODE_METHOD`              | `cpu_h265` | **The Encoder Engine.**<br>Options: `cpu_h265`, `cpu_av1`, `nvidia_h265`, `nvidia_av1`, `intel_h265`, `intel_av1`.                                                                                |
+| `ENCODE_PRESET`              | `default`  | **Speed vs. Efficiency.**<br>`default` automatically picks `medium` (CPU) or `p4` (Nvidia).<br>Manual options: `slow`, `fast`, `p1`-`p7` (Nvidia), `0`-`13` (SVT-AV1).                            |
+| `ENCODE_THREADS`             | `0`        | **CPU Usage.**<br>`0` = Auto-Detect (Checks for pinning).<br>Set a number (e.g., `4`) to force a specific thread count. Only affects CPU encoding.                                                |
+| `ENCODE_PARALLEL_JOBS`       | `1`        | **Files in Parallel.**<br>How many files to transcode at the same time.<br>`1` = sequential (default).<br>Recommended: `2` for GPU methods, `1` for CPU methods unless you have many spare cores. |
+| `ENCODE_WATCH_MODE`          | `0`        | **Continuous Folder Watch.**<br>`0` = Run once and stop.<br>`1` = Keep container running and automatically process new files when they are copied into `/import`.                                 |
+| `ENCODE_WATCH_POLL_SECONDS`  | `30`       | **Watch Fallback Interval.**<br>Used only if inotify is unavailable inside the container.<br>Minimum valid value: `5`.                                                                            |
+| `ENCODE_FILE_STABLE_SECONDS` | `5`        | **Copy Safety Gate.**<br>Before encoding starts, file size must remain unchanged for this many seconds.<br>Set `0` to disable the stability wait.                                                 |
+| `ENCODE_CRF`                 | _(Smart)_  | **Quality for CPU/Intel.**<br>Lower value = Better Quality, Larger File.<br>Defaults: `18` (H.265), `24` (AV1).                                                                                   |
+| `ENCODE_CQ`                  | _(Smart)_  | **Quality for Nvidia.**<br>Lower value = Better Quality, Larger File.<br>Defaults: `19` (H.265), `24` (AV1).                                                                                      |
+| `ENCODE_MAP_ARGS`            | `-map 0`   | **Stream Selection.**<br>Default maps all streams (video, all audio tracks, subtitles, attachments).<br>Example for smaller files: `-map 0:v:0 -map 0:a:0` (first video + first audio only).      |
+| `FFMPEG_CUSTOM_ARGS`         | _(Empty)_  | **Audio/Subtitles Override.**<br>Default behavior is `-c:a copy -c:s copy`.<br>Use this to convert audio, e.g., `-c:a aac -b:a 192k`.                                                             |
+| `NVIDIA_VISIBLE_DEVICES`     | `all`      | **GPU Selection.**<br>Set to your GPU UUID (e.g., `GPU-xxxx...`) or `all`.                                                                                                                        |
+| `UNRAID_UID`                 | `99`       | User ID for file permissions (Standard Unraid: 99).                                                                                                                                               |
+| `UNRAID_GID`                 | `100`      | Group ID for file permissions (Standard Unraid: 100).                                                                                                                                             |
 
 ### HandBrake-Like Smaller File Setup
 
@@ -133,6 +134,7 @@ Automatic processing when new files arrive:
 
 ```text
 ENCODE_WATCH_MODE=1
+ENCODE_FILE_STABLE_SECONDS=5
 ```
 
 This approximates your HandBrake behavior (first video + first audio, AAC stereo, no subtitles). HDR sources remain HDR with the script's HDR-preservation logic.
