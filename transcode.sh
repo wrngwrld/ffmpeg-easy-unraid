@@ -579,19 +579,23 @@ wait_for_new_files() {
 
 run_batch_once() {
     local files=()
-    while IFS= read -r -d '' file; do
-        [ -n "$file" ] && files+=("$file")
-    done < <(scan_files)
+    if [ "$FINAL_WATCH_MODE" -ne 1 ]; then
+        while IFS= read -r -d '' file; do
+            [ -n "$file" ] && files+=("$file")
+        done < <(scan_files)
+    fi
 
     local total_files=${#files[@]}
 
-    if [ "$total_files" -eq 0 ]; then
+    if [ "$FINAL_WATCH_MODE" -ne 1 ] && [ "$total_files" -eq 0 ]; then
         echo "[INFO] No files found."
         return 0
     fi
 
-    echo "[INFO] Found $total_files files to process."
-    echo "--------------------------------------------------------"
+    if [ "$FINAL_WATCH_MODE" -ne 1 ]; then
+        echo "[INFO] Found $total_files files to process."
+        echo "--------------------------------------------------------"
+    fi
 
     local count_success=0
     local count_failed=0
@@ -613,37 +617,49 @@ run_batch_once() {
         renderer_pid=$!
     fi
 
-    for input_file in "${files[@]}"; do
-        ((current_index++))
-        if [ "$FINAL_PARALLEL_JOBS" -le 1 ]; then
-            process_one_file "$input_file" "$current_index" "$total_files" "$result_dir/$current_index.result"
-        else
-            local progress_status_file="$progress_dir/$current_index.status"
-            process_one_file "$input_file" "$current_index" "$total_files" "$result_dir/$current_index.result" "$progress_status_file" &
-            while true; do
-                local running_workers
-                if [ -n "$renderer_pid" ]; then
-                    running_workers=$(jobs -rp | awk -v rp="$renderer_pid" '$1 != rp' | wc -l)
-                else
-                    running_workers=$(jobs -rp | wc -l)
-                fi
+    if [ "$FINAL_WATCH_MODE" -eq 1 ]; then
+        local next_file=""
+        local running_workers=0
+        local work_started=0
+        local total_label="queue"
+        declare -A seen_paths=()
 
-                if [ "$running_workers" -lt "$FINAL_PARALLEL_JOBS" ]; then
-                    break
-                fi
-
-                wait -n
-            done
-        fi
-    done
-
-    if [ "$FINAL_PARALLEL_JOBS" -gt 1 ]; then
         while true; do
-            local running_workers
             if [ -n "$renderer_pid" ]; then
                 running_workers=$(jobs -rp | awk -v rp="$renderer_pid" '$1 != rp' | wc -l)
             else
                 running_workers=$(jobs -rp | wc -l)
+            fi
+
+            while [ "$running_workers" -lt "$FINAL_PARALLEL_JOBS" ]; do
+                next_file=""
+                while IFS= read -r -d '' file; do
+                    [ -z "$file" ] && continue
+                    if [ -z "${seen_paths[$file]+x}" ]; then
+                        next_file="$file"
+                        break
+                    fi
+                done < <(scan_files)
+
+                [ -z "$next_file" ] && break
+
+                ((current_index++))
+                seen_paths["$next_file"]=1
+                work_started=1
+
+                if [ "$FINAL_PARALLEL_JOBS" -le 1 ]; then
+                    process_one_file "$next_file" "$current_index" "$total_label" "$result_dir/$current_index.result" &
+                else
+                    local progress_status_file="$progress_dir/$current_index.status"
+                    process_one_file "$next_file" "$current_index" "$total_label" "$result_dir/$current_index.result" "$progress_status_file" &
+                fi
+
+                running_workers=$((running_workers + 1))
+            done
+
+            if [ "$work_started" -eq 0 ]; then
+                echo "[INFO] No files found."
+                break
             fi
 
             if [ "$running_workers" -eq 0 ]; then
@@ -652,6 +668,47 @@ run_batch_once() {
 
             wait -n
         done
+    else
+        for input_file in "${files[@]}"; do
+            ((current_index++))
+            if [ "$FINAL_PARALLEL_JOBS" -le 1 ]; then
+                process_one_file "$input_file" "$current_index" "$total_files" "$result_dir/$current_index.result"
+            else
+                local progress_status_file="$progress_dir/$current_index.status"
+                process_one_file "$input_file" "$current_index" "$total_files" "$result_dir/$current_index.result" "$progress_status_file" &
+                while true; do
+                    local running_workers_batch
+                    if [ -n "$renderer_pid" ]; then
+                        running_workers_batch=$(jobs -rp | awk -v rp="$renderer_pid" '$1 != rp' | wc -l)
+                    else
+                        running_workers_batch=$(jobs -rp | wc -l)
+                    fi
+
+                    if [ "$running_workers_batch" -lt "$FINAL_PARALLEL_JOBS" ]; then
+                        break
+                    fi
+
+                    wait -n
+                done
+            fi
+        done
+
+        if [ "$FINAL_PARALLEL_JOBS" -gt 1 ]; then
+            while true; do
+                local running_workers_batch
+                if [ -n "$renderer_pid" ]; then
+                    running_workers_batch=$(jobs -rp | awk -v rp="$renderer_pid" '$1 != rp' | wc -l)
+                else
+                    running_workers_batch=$(jobs -rp | wc -l)
+                fi
+
+                if [ "$running_workers_batch" -eq 0 ]; then
+                    break
+                fi
+
+                wait -n
+            done
+        fi
     fi
 
     if [ -n "$renderer_pid" ]; then
