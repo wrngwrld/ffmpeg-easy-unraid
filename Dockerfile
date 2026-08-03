@@ -16,6 +16,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # --- CONFIG DEFAULTS ---
 ENV ENCODE_METHOD=intel_h265
 ENV ENCODE_QP=22
+ENV ADMIN_PORT=8080
 
 # Custom Arguments
 ENV FFMPEG_CUSTOM_ARGS=""
@@ -33,6 +34,7 @@ ENV NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ffmpeg \
+    python3 \
     libva-drm2 \
     libva-x11-2 \
     vainfo \
@@ -49,7 +51,12 @@ RUN apt-get update && \
 # Root directories for simplified access
 WORKDIR /
 
+COPY admin_server.py /opt/ffmpeg-easy/admin_server.py
+COPY web /opt/ffmpeg-easy/web
+COPY start.sh /usr/local/bin/start.sh
 COPY transcode.sh /usr/local/bin/transcode.sh
-RUN chmod +x /usr/local/bin/transcode.sh
+RUN chmod +x /usr/local/bin/transcode.sh /usr/local/bin/start.sh
 
-ENTRYPOINT ["/usr/local/bin/transcode.sh"]
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/start.sh"]

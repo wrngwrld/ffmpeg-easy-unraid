@@ -28,6 +28,7 @@ It is designed to be robust ("fail-safe") and focused on Intel QuickSync H.265 f
 - **Detailed Stats:** Displays exact space savings (GB/MB and %) after every run.
 - **Container Standardization:** Automatically outputs to **.MKV** for maximum compatibility with subtitles and audio tracks.
 - **Optional Watch Mode:** Can run continuously and auto-start a new transcode batch when new files appear in `/import`.
+- **Admin Console:** A built-in web dashboard shows queue depth, current jobs, and runtime state at `http://<host>:8080`.
 
 ---
 
@@ -53,6 +54,23 @@ On startup, the container runs a QuickSync hardware check. If successful, encodi
 ---
 
 ## 🚀 Configuration & Environment Variables
+
+## Admin Page
+
+The container now serves a lightweight admin page on port `8080`.
+
+Open it in your browser:
+
+```text
+http://<your-unraid-ip>:8080
+```
+
+It shows:
+
+- queue size from `/import`
+- active encode workers and progress
+- current batch/watch state
+- key runtime settings like QP and parallel jobs
 
 The container is controlled via Environment Variables.
 

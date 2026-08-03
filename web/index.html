@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FFmpeg Easy Admin</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="noise"></div>
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+
+    <nav class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="#overview">
+          <span class="brand-mark">FF</span>
+          <span>FFmpeg<span class="brand-accent">Easy</span></span>
+        </a>
+        <div class="topbar-links">
+          <a href="#overview">Overview</a>
+          <a href="#jobs">Jobs</a>
+          <a href="#runtime">Runtime</a>
+        </div>
+      </div>
+    </nav>
+
+    <main class="shell">
+      <section class="hero" id="overview">
+        <div class="hero-bg"></div>
+        <div class="hero-content panel">
+          <div class="hero-copy">
+            <div class="tag">
+              <span class="tag-dot"></span>
+              FFmpeg Easy Unraid
+            </div>
+            <h1>
+              Transcode Admin.<br /><span class="gradient-text"
+                >Liquid, live, readable.</span
+              >
+            </h1>
+            <p class="lede">
+              A darker, calmer control surface for queue depth, active encode
+              workers, and the current batch state without digging through raw
+              container logs.
+            </p>
+            <div class="hero-inline">
+              <span id="state-pill" class="pill">Loading</span>
+              <p id="last-updated" class="muted">Waiting for runtime state…</p>
+            </div>
+          </div>
+
+          <div class="hero-glass">
+            <div class="mini-card">
+              <p class="mini-label">Method</p>
+              <p id="status-method" class="mini-value">intel_h265</p>
+            </div>
+            <div class="mini-card wide">
+              <p class="mini-label">Message</p>
+              <p id="status-message" class="mini-message">
+                Waiting for runtime state…
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="marquee-section panel">
+        <div class="marquee-track">
+          <span class="marquee-item"
+            ><span class="marquee-dot"></span>Live Queue Depth</span
+          >
+          <span class="marquee-item"
+            ><span class="marquee-dot"></span>Active Encode Workers</span
+          >
+          <span class="marquee-item"
+            ><span class="marquee-dot"></span>Watch Mode Status</span
+          >
+          <span class="marquee-item"
+            ><span class="marquee-dot"></span>Batch Health</span
+          >
+          <span class="marquee-item"
+            ><span class="marquee-dot"></span>QP Tracking</span
+          >
+          <span class="marquee-item"
+            ><span class="marquee-dot"></span>Live Queue Depth</span
+          >
+          <span class="marquee-item"
+            ><span class="marquee-dot"></span>Active Encode Workers</span
+          >
+          <span class="marquee-item"
+            ><span class="marquee-dot"></span>Watch Mode Status</span
+          >
+          <span class="marquee-item"
+            ><span class="marquee-dot"></span>Batch Health</span
+          >
+          <span class="marquee-item"
+            ><span class="marquee-dot"></span>QP Tracking</span
+          >
+        </div>
+      </section>
+
+      <section class="stats-grid">
+        <article class="stat-card panel accent-cyan">
+          <p class="label">Queue</p>
+          <p id="queue-count" class="value">0</p>
+          <p class="caption">files waiting in /import</p>
+        </article>
+        <article class="stat-card panel accent-indigo">
+          <p class="label">Parallel Jobs</p>
+          <p id="parallel-jobs" class="value">0</p>
+          <p class="caption">configured worker slots</p>
+        </article>
+        <article class="stat-card panel accent-coral">
+          <p class="label">QP</p>
+          <p id="qp-value" class="value">0</p>
+          <p class="caption">constant quality target</p>
+        </article>
+        <article class="stat-card panel accent-olive">
+          <p class="label">Watch Mode</p>
+          <p id="watch-mode" class="value">Off</p>
+          <p class="caption">continuous intake status</p>
+        </article>
+      </section>
+
+      <section class="content-grid">
+        <article class="panel jobs-panel" id="jobs">
+          <div class="panel-head">
+            <div>
+              <div class="tag small-tag">
+                <span class="tag-dot"></span>Live Jobs
+              </div>
+              <h2>Active Encodes</h2>
+              <p class="panel-sub">
+                Current worker slots with progress, speed, and elapsed runtime.
+              </p>
+            </div>
+            <p id="jobs-summary" class="muted">No active workers</p>
+          </div>
+          <div id="jobs-list" class="jobs-list empty-state">
+            No active jobs yet.
+          </div>
+        </article>
+
+        <article class="panel runtime-panel" id="runtime">
+          <div class="panel-head">
+            <div>
+              <div class="tag small-tag">
+                <span class="tag-dot"></span>Runtime
+              </div>
+              <h2>Batch Snapshot</h2>
+              <p class="panel-sub">
+                A compact state view for the current or most recent run.
+              </p>
+            </div>
+          </div>
+          <dl class="details-list">
+            <div>
+              <dt>Batch Total</dt>
+              <dd id="batch-total">0</dd>
+            </div>
+            <div>
+              <dt>Processed</dt>
+              <dd id="batch-processed">0</dd>
+            </div>
+            <div>
+              <dt>Succeeded</dt>
+              <dd id="batch-succeeded">0</dd>
+            </div>
+            <div>
+              <dt>Failed</dt>
+              <dd id="batch-failed">0</dd>
+            </div>
+          </dl>
+        </article>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

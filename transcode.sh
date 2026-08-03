@@ -24,6 +24,9 @@ TARGET_GID="${UNRAID_GID:-100}"
 SOURCE_DIR="/import"
 EXPORT_DIR="/export"
 FINISHED_DIR="$SOURCE_DIR/finished"
+ADMIN_STATE_DIR="/tmp/ffmpeg-easy-admin"
+ADMIN_PROGRESS_DIR="$ADMIN_STATE_DIR/progress"
+ADMIN_STATUS_FILE="$ADMIN_STATE_DIR/status.json"
 
 QP_VALUE=""
 FINAL_PARALLEL_JOBS=1
@@ -40,6 +43,45 @@ SIZE_OUT_TOTAL=0
 # ==============================================================================
 # FUNCTIONS
 # ==============================================================================
+
+admin_json_escape() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+admin_init_runtime() {
+    mkdir -p "$ADMIN_PROGRESS_DIR"
+    rm -f "$ADMIN_PROGRESS_DIR"/*.status "$ADMIN_STATE_DIR"/progress.stop
+}
+
+admin_write_status() {
+    local state="$1"
+    local message="$2"
+    local batch_total="${3:-0}"
+    local batch_processed="${4:-0}"
+    local batch_succeeded="${5:-0}"
+    local batch_failed="${6:-0}"
+    local escaped_message
+
+    mkdir -p "$ADMIN_PROGRESS_DIR"
+    escaped_message=$(admin_json_escape "$message")
+
+    cat > "$ADMIN_STATUS_FILE" <<EOF
+{
+  "state": "${state}",
+  "message": "${escaped_message}",
+  "method": "${METHOD}",
+  "qp": ${QP_VALUE:-0},
+  "watchMode": ${FINAL_WATCH_MODE},
+  "parallelJobs": ${FINAL_PARALLEL_JOBS},
+  "livePreview": ${FINAL_LIVE_PREVIEW},
+  "batchTotal": "${batch_total}",
+  "batchProcessed": ${batch_processed},
+  "batchSucceeded": ${batch_succeeded},
+  "batchFailed": ${batch_failed},
+  "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+}
 
 configure_settings() {
     if [ "$METHOD" != "intel_h265" ]; then
@@ -123,6 +165,8 @@ check_paths() {
     mkdir -p "$EXPORT_DIR"
     mkdir -p "$FINISHED_DIR"
     chown "$TARGET_UID":"$TARGET_GID" "$FINISHED_DIR"
+    admin_init_runtime
+    admin_write_status "starting" "Container initialized" 0 0 0 0
 }
 
 check_hardware() {
@@ -567,6 +611,7 @@ scan_files() {
 }
 
 wait_for_new_files() {
+    admin_write_status "watching" "Waiting for new files" "queue" 0 0 0
     if command -v inotifywait >/dev/null 2>&1; then
         echo "[WATCH] Waiting for new files in '$SOURCE_DIR' (inotify)..."
         # Trigger only when a write is closed or a fully written file is moved into place.
@@ -605,11 +650,11 @@ run_batch_once() {
     local result_dir
     local batch_start=$SECONDS
     result_dir=$(mktemp -d /tmp/ffmpeg-easy-results.XXXXXX)
-    local progress_dir="$result_dir/progress"
-    local progress_stop_file="$result_dir/progress.stop"
+    local progress_dir="$ADMIN_PROGRESS_DIR"
+    local progress_stop_file="$ADMIN_STATE_DIR/progress.stop"
     local renderer_pid=""
 
-    mkdir -p "$progress_dir"
+    admin_init_runtime
 
     if [ "$FINAL_PARALLEL_JOBS" -gt 1 ] && [ "$FINAL_LIVE_PREVIEW" -eq 1 ]; then
         echo "[INFO] Parallel snapshot mode enabled for non-interactive logs (${FINAL_PARALLEL_JOBS} jobs)."
@@ -623,6 +668,8 @@ run_batch_once() {
         local work_started=0
         local total_label="queue"
         declare -A seen_paths=()
+
+        admin_write_status "watching" "Watching for queued files" "$total_label" 0 0 0
 
         while true; do
             if [ -n "$renderer_pid" ]; then
@@ -646,6 +693,7 @@ run_batch_once() {
                 ((current_index++))
                 seen_paths["$next_file"]=1
                 work_started=1
+                admin_write_status "running" "Processing queued files" "$total_label" 0 "$count_success" "$count_failed"
 
                 if [ "$FINAL_PARALLEL_JOBS" -le 1 ]; then
                     process_one_file "$next_file" "$current_index" "$total_label" "$result_dir/$current_index.result" &
@@ -659,6 +707,7 @@ run_batch_once() {
 
             if [ "$work_started" -eq 0 ]; then
                 echo "[INFO] No files found."
+                admin_write_status "idle" "No files found" "$total_label" 0 0 0
                 break
             fi
 
@@ -669,6 +718,7 @@ run_batch_once() {
             wait -n
         done
     else
+        admin_write_status "running" "Processing batch" "$total_files" 0 0 0
         for input_file in "${files[@]}"; do
             ((current_index++))
             if [ "$FINAL_PARALLEL_JOBS" -le 1 ]; then
@@ -759,6 +809,12 @@ run_batch_once() {
         echo " Saved:      $txt_diff ($percent%)"
     fi
     echo "========================================================"
+
+        if [ "$FINAL_WATCH_MODE" -eq 1 ]; then
+            admin_write_status "watching" "Waiting for new files" "queue" "$((count_success + count_failed))" "$count_success" "$count_failed"
+        else
+            admin_write_status "completed" "Batch finished" "$total_files" "$((count_success + count_failed))" "$count_success" "$count_failed"
+        fi
 
     return 0
 }

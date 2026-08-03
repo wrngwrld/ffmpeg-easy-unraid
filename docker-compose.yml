@@ -36,6 +36,10 @@ services:
       - /path/to/your/media:/import
       - /path/to/output/folder:/export
 
+    ports:
+      - "8080:8080" # Admin page
+
+
     # --- HARDWARE: INTEL (Uncomment for QuickSync/Arc support) ---
     # devices:
     #   - /dev/dri:/dev/dri
