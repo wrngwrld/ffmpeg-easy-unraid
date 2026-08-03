@@ -638,7 +638,20 @@ run_batch_once() {
     done
 
     if [ "$FINAL_PARALLEL_JOBS" -gt 1 ]; then
-        wait
+        while true; do
+            local running_workers
+            if [ -n "$renderer_pid" ]; then
+                running_workers=$(jobs -rp | awk -v rp="$renderer_pid" '$1 != rp' | wc -l)
+            else
+                running_workers=$(jobs -rp | wc -l)
+            fi
+
+            if [ "$running_workers" -eq 0 ]; then
+                break
+            fi
+
+            wait -n
+        done
     fi
 
     if [ -n "$renderer_pid" ]; then
@@ -708,6 +721,12 @@ if [ "$FINAL_WATCH_MODE" -eq 1 ]; then
     echo "[WATCH] Continuous mode enabled."
     while true; do
         run_batch_once
+
+        if scan_files | grep -q .; then
+            echo "[WATCH] Additional files detected. Starting next batch immediately."
+            continue
+        fi
+
         wait_for_new_files
     done
 else
