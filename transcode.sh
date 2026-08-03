@@ -330,7 +330,7 @@ process_one_file() {
     if [ "$FINAL_LIVE_PREVIEW" -eq 1 ]; then
         echo "${log_tag}Starting ffmpeg encode..."
         eval "$CMD_STR" \
-            2> >(grep -v -e 'Failed to set thread priority' -e 'set_mempolicy' | awk -v p="$log_tag" '{ print p $0; fflush() }' >&2)
+            2> >(awk -v p="$log_tag" '!/Failed to set thread priority|set_mempolicy/ { print p $0; fflush() }' >&2)
     else
         eval "$CMD_STR 2> >(grep -v -e 'Failed to set thread priority' -e 'set_mempolicy' >&2)"
     fi
