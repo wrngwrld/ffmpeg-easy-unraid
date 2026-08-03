@@ -649,6 +649,7 @@ render_parallel_dashboard() {
 emit_parallel_progress_snapshots() {
     local progress_dir="$1"
     local stop_file="$2"
+    local last_summary=""
 
     while true; do
         local status_files=("$progress_dir"/*.status)
@@ -675,9 +676,8 @@ emit_parallel_progress_snapshots() {
 
                 [ -z "$idx" ] && continue
 
-                local state_tag="RUN"
-                [ "$state" = "done" ] && state_tag="DONE"
-                [ "$state" = "fail" ] && state_tag="FAIL"
+                # Snapshot mode should focus on active work only.
+                [ "$state" != "run" ] && continue
 
                 local bar
                 bar=$(render_progress_bar "$pct" 12)
@@ -685,12 +685,13 @@ emit_parallel_progress_snapshots() {
                 if [ -n "$summary" ]; then
                     summary+=" | "
                 fi
-                summary+="#${idx} ${state_tag} [${bar}] ${pct}% @${speed}"
+                summary+="#${idx} RUN [${bar}] ${pct}% @${speed}"
             done
         fi
 
-        if [ -n "$summary" ]; then
+        if [ -n "$summary" ] && [ "$summary" != "$last_summary" ]; then
             echo "[PROGRESS] $summary"
+            last_summary="$summary"
         fi
 
         if [ -f "$stop_file" ]; then
