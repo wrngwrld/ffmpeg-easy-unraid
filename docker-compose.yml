@@ -23,6 +23,8 @@ services:
       - ENCODE_PROGRESS_INTERVAL=2 # Progress update interval in seconds
       - ENCODE_HEARTBEAT_SECONDS=10 # Guaranteed per-job heartbeat interval
       - ENCODE_LOG_MODE=detailed # detailed or compact live log output
+      - ENCODE_PROGRESS_STYLE=ascii # ascii or unicode progress bar
+      - ENCODE_PROGRESS_COLOR=auto # auto, 1, or 0
       - ENCODE_BITRATE_MODE=quality # quality or source bitrate mode
       - ENCODE_QP=22 # Intel H265 quality control (lower=better quality)
       - FFMPEG_CUSTOM_ARGS= # E.g. "-c:a aac" for audio conversion

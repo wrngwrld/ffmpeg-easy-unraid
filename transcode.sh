@@ -19,6 +19,8 @@ PROGRESS_INTERVAL_INPUT="${ENCODE_PROGRESS_INTERVAL:-2}"
 HEARTBEAT_SECONDS_INPUT="${ENCODE_HEARTBEAT_SECONDS:-10}"
 LOG_MODE_INPUT="${ENCODE_LOG_MODE:-detailed}"
 BITRATE_MODE_INPUT="${ENCODE_BITRATE_MODE:-quality}"
+PROGRESS_STYLE_INPUT="${ENCODE_PROGRESS_STYLE:-ascii}"
+PROGRESS_COLOR_INPUT="${ENCODE_PROGRESS_COLOR:-auto}"
 
 TARGET_UID="${UNRAID_UID:-99}"
 TARGET_GID="${UNRAID_GID:-100}"
@@ -38,6 +40,8 @@ FINAL_PROGRESS_INTERVAL=2
 FINAL_HEARTBEAT_SECONDS=10
 FINAL_LOG_MODE="detailed"
 FINAL_BITRATE_MODE="quality"
+FINAL_PROGRESS_STYLE="ascii"
+FINAL_PROGRESS_COLOR=0
 START_TIME=$SECONDS
 SIZE_IN_TOTAL=0
 SIZE_OUT_TOTAL=0
@@ -123,7 +127,38 @@ configure_settings() {
             ;;
     esac
 
-    # H) Bitrate Mode
+    # H) Progress Bar Style
+    case "${PROGRESS_STYLE_INPUT,,}" in
+        ascii) FINAL_PROGRESS_STYLE="ascii" ;;
+        unicode|blocks|block) FINAL_PROGRESS_STYLE="unicode" ;;
+        *)
+            echo "[WARN] Invalid ENCODE_PROGRESS_STYLE='$PROGRESS_STYLE_INPUT'. Falling back to ascii."
+            FINAL_PROGRESS_STYLE="ascii"
+            ;;
+    esac
+
+    # I) Progress Color
+    case "${PROGRESS_COLOR_INPUT,,}" in
+        1|true|yes|on) FINAL_PROGRESS_COLOR=1 ;;
+        0|false|no|off) FINAL_PROGRESS_COLOR=0 ;;
+        auto|"")
+            if [ -t 1 ]; then
+                FINAL_PROGRESS_COLOR=1
+            else
+                FINAL_PROGRESS_COLOR=0
+            fi
+            ;;
+        *)
+            echo "[WARN] Invalid ENCODE_PROGRESS_COLOR='$PROGRESS_COLOR_INPUT'. Falling back to auto."
+            if [ -t 1 ]; then
+                FINAL_PROGRESS_COLOR=1
+            else
+                FINAL_PROGRESS_COLOR=0
+            fi
+            ;;
+    esac
+
+    # J) Bitrate Mode
     case "${BITRATE_MODE_INPUT,,}" in
         quality) FINAL_BITRATE_MODE="quality" ;;
         source|source_bitrate) FINAL_BITRATE_MODE="source" ;;
@@ -291,6 +326,12 @@ process_one_file() {
     local current_in_size
     current_in_size=$(stat -c%s "$input_file")
 
+    local src_duration
+    src_duration=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$input_file" 2>/dev/null | head -n1)
+    if ! [[ "$src_duration" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        src_duration=""
+    fi
+
     local VIDEO_META
     VIDEO_META=$(detect_video_metadata "$input_file")
     local IS_HDR HDR_TRANSFER HDR_PRIMARIES HDR_COLORSPACE SRC_COLOR_RANGE SRC_VIDEO_BITRATE
@@ -313,14 +354,27 @@ process_one_file() {
 
     local ff_ret=0
     local ff_err_log=""
+    local ff_progress_log=""
+    local can_inline_progress=0
+    local can_use_color=0
     if [ "$FINAL_LIVE_PREVIEW" -eq 1 ]; then
         echo "${log_tag}Starting ffmpeg encode..."
         local encode_start=$SECONDS
+        ff_progress_log=$(mktemp /tmp/ffmpeg-progress.XXXXXX)
+        local CMD_RUN_STR="$CMD_STR"
+        CMD_RUN_STR=${CMD_RUN_STR/ -nostats/ -nostats -progress \"$ff_progress_log\"}
+        if [ -t 1 ] && [ "$FINAL_PARALLEL_JOBS" -eq 1 ]; then
+            can_inline_progress=1
+        fi
+        if [ -t 1 ] && [ "$FINAL_PROGRESS_COLOR" -eq 1 ]; then
+            can_use_color=1
+        fi
+
         if [ "$FINAL_LOG_MODE" = "compact" ]; then
             ff_err_log=$(mktemp /tmp/ffmpeg-err.XXXXXX)
-            eval "$CMD_STR" 2> "$ff_err_log" &
+            eval "$CMD_RUN_STR" 2> "$ff_err_log" &
         else
-            eval "$CMD_STR" \
+            eval "$CMD_RUN_STR" \
                 2> >(awk -v p="$log_tag" '!/Failed to set thread priority|set_mempolicy/ { print p $0; fflush() }' >&2) &
         fi
         local ff_pid=$!
@@ -333,12 +387,62 @@ process_one_file() {
                 if [ -f "$out_file" ]; then
                     current_out_live_size=$(stat -c%s "$out_file" 2>/dev/null || echo 0)
                 fi
-                echo "${log_tag}Heartbeat: running ${elapsed}s, output $(format_bytes_dual "$current_out_live_size")"
+
+                local pct_display="--.--"
+                local bar
+                local speed_display="n/a"
+                bar=$(render_progress_bar "$pct_display" 24)
+
+                if [ -n "$ff_progress_log" ] && [ -f "$ff_progress_log" ]; then
+                    local out_time_ms
+                    out_time_ms=$(awk -F= '/^out_time_ms=/{v=$2} END{print v+0}' "$ff_progress_log" 2>/dev/null)
+                    speed_display=$(awk -F= '/^speed=/{v=$2} END{print v}' "$ff_progress_log" 2>/dev/null)
+                    [ -z "$speed_display" ] && speed_display="n/a"
+
+                    if [ -n "$src_duration" ] && [[ "$out_time_ms" =~ ^[0-9]+$ ]] && [ "$out_time_ms" -ge 0 ]; then
+                        pct_display=$(awk -v ms="$out_time_ms" -v d="$src_duration" 'BEGIN {
+                            if (d <= 0) { printf "--.--"; exit }
+                            p=(ms/1000000)/d*100
+                            if (p < 0) p=0
+                            if (p > 100) p=100
+                            printf "%.2f", p
+                        }')
+                        bar=$(render_progress_bar "$pct_display" 24)
+                    fi
+                fi
+
+                local decorated_bar="[${bar}]"
+                local decorated_pct="${pct_display}%"
+                if [ "$can_use_color" -eq 1 ]; then
+                    local c_reset=$'\033[0m'
+                    local c_bar=$'\033[36m'
+                    local c_pct=$'\033[33m'
+                    if [[ "$pct_display" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+                        if awk -v p="$pct_display" 'BEGIN { exit !(p >= 90) }'; then
+                            c_pct=$'\033[32m'
+                        elif awk -v p="$pct_display" 'BEGIN { exit !(p >= 60) }'; then
+                            c_pct=$'\033[92m'
+                        fi
+                    fi
+                    decorated_bar="${c_bar}[${bar}]${c_reset}"
+                    decorated_pct="${c_pct}${pct_display}%${c_reset}"
+                fi
+
+                local progress_line="${log_tag}${decorated_bar} ${decorated_pct} | speed ${speed_display} | t=${elapsed}s | out $(format_bytes_dual "$current_out_live_size")"
+                if [ "$can_inline_progress" -eq 1 ]; then
+                    printf '\r\033[2K%s' "$progress_line"
+                else
+                    echo "$progress_line"
+                fi
             fi
         done
 
         wait "$ff_pid"
         ff_ret=$?
+
+        if [ "$can_inline_progress" -eq 1 ]; then
+            printf '\n'
+        fi
 
         if [ "$ff_ret" -ne 0 ] && [ "$FINAL_LOG_MODE" = "compact" ] && [ -n "$ff_err_log" ] && [ -f "$ff_err_log" ]; then
             echo "${log_tag}ffmpeg failed. Last log lines:"
@@ -347,6 +451,9 @@ process_one_file() {
 
         if [ -n "$ff_err_log" ] && [ -f "$ff_err_log" ]; then
             rm -f "$ff_err_log"
+        fi
+        if [ -n "$ff_progress_log" ] && [ -f "$ff_progress_log" ]; then
+            rm -f "$ff_progress_log"
         fi
     else
         eval "$CMD_STR 2> >(grep -v -e 'Failed to set thread priority' -e 'set_mempolicy' >&2)"
@@ -401,6 +508,45 @@ format_bytes_dual() {
     local mb=$(awk -v b="$bytes" 'BEGIN { printf "%.2f", b/1048576 }')
     
     echo "${gb} GB | ${mb} MB"
+}
+
+render_progress_bar() {
+    local percent="$1"
+    local width="${2:-24}"
+
+    local filled
+    filled=$(awk -v p="$percent" -v w="$width" 'BEGIN {
+        if (p < 0) p = 0;
+        if (p > 100) p = 100;
+        printf "%d", (p/100)*w
+    }')
+
+    local empty=$((width - filled))
+    local fill_char="#"
+    local empty_char="-"
+    local bar=""
+
+    if [ "$FINAL_PROGRESS_STYLE" = "unicode" ]; then
+        fill_char="█"
+        empty_char="░"
+    fi
+
+    bar="$(repeat_char "$fill_char" "$filled")$(repeat_char "$empty_char" "$empty")"
+
+    echo "$bar"
+}
+
+repeat_char() {
+    local char="$1"
+    local count="$2"
+    local out=""
+
+    while [ "$count" -gt 0 ]; do
+        out+="$char"
+        count=$((count - 1))
+    done
+
+    echo "$out"
 }
 
 wait_for_file_stable() {
