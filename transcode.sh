@@ -682,10 +682,22 @@ emit_parallel_progress_snapshots() {
                 local bar
                 bar=$(render_progress_bar "$pct" 12)
 
+                local pct_num="$pct"
+                local pct_fmt="  0.00%"
+                if [[ "$pct_num" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+                    pct_fmt=$(awk -v p="$pct_num" 'BEGIN { printf "%6.2f%%", p }')
+                fi
+
+                local speed_fmt="  n/a "
+                if [[ "$speed" =~ ^[0-9]+([.][0-9]+)?x$ ]]; then
+                    local speed_num="${speed%x}"
+                    speed_fmt=$(awk -v s="$speed_num" 'BEGIN { printf "%5.2fx", s }')
+                fi
+
                 if [ -n "$summary" ]; then
                     summary+=" | "
                 fi
-                summary+="#${idx} RUN [${bar}] ${pct}% @${speed}"
+                summary+=$(printf "#%02d RUN [%s] %s @%s" "$idx" "$bar" "$pct_fmt" "$speed_fmt")
             done
         fi
 
