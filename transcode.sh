@@ -369,7 +369,6 @@ process_one_file() {
     local ff_ret=0
     local ff_err_log=""
     local ff_progress_log=""
-    local can_inline_progress=0
     local can_use_color=0
     if [ -n "$progress_status_file" ]; then
         printf 'state=run|index=%s|name=%s|pct=0.00|speed=n/a|elapsed=0|out=0\n' "$index" "$short_name" > "$progress_status_file"
@@ -380,9 +379,6 @@ process_one_file() {
         ff_progress_log=$(mktemp /tmp/ffmpeg-progress.XXXXXX)
         local CMD_RUN_STR="$CMD_STR"
         CMD_RUN_STR=${CMD_RUN_STR/ -nostats/ -nostats -progress \"$ff_progress_log\"}
-        if [ -t 1 ] && [ "$FINAL_PARALLEL_JOBS" -eq 1 ]; then
-            can_inline_progress=1
-        fi
         if [ -t 1 ] && [ "$FINAL_PROGRESS_COLOR" -eq 1 ]; then
             can_use_color=1
         fi
@@ -449,8 +445,6 @@ process_one_file() {
                 local progress_line="${progress_head} ${decorated_bar} ${decorated_pct} | ${short_name} | speed ${speed_display} | t=${elapsed}s | out $(format_bytes_dual "$current_out_live_size")"
                 if [ -n "$progress_status_file" ]; then
                     printf 'state=run|index=%s|name=%s|pct=%s|speed=%s|elapsed=%s|out=%s\n' "$index" "$short_name" "$pct_display" "$speed_display" "$elapsed" "$current_out_live_size" > "$progress_status_file"
-                elif [ "$can_inline_progress" -eq 1 ]; then
-                    printf '\r\033[2K%s' "$progress_line"
                 else
                     echo "$progress_line"
                 fi
@@ -461,10 +455,6 @@ process_one_file() {
 
         wait "$ff_pid"
         ff_ret=$?
-
-        if [ "$can_inline_progress" -eq 1 ]; then
-            printf '\n'
-        fi
 
         if [ "$ff_ret" -ne 0 ] && [ "$FINAL_LOG_MODE" = "compact" ] && [ -n "$ff_err_log" ] && [ -f "$ff_err_log" ]; then
             echo "${log_tag}ffmpeg failed. Last log lines:"
@@ -574,73 +564,6 @@ repeat_char() {
     done
 
     echo "$out"
-}
-
-render_parallel_dashboard() {
-    local progress_dir="$1"
-    local stop_file="$2"
-    local previous_lines=0
-
-    while true; do
-        local display_lines=()
-        local status_files=("$progress_dir"/*.status)
-
-        if [ -e "${status_files[0]}" ]; then
-            local status_file
-            for status_file in $(ls "$progress_dir"/*.status 2>/dev/null | sort -V); do
-                local line
-                line=$(cat "$status_file" 2>/dev/null)
-                [ -z "$line" ] && continue
-
-                local state="" idx="" name="" pct="0.00" speed="n/a" elapsed="0" out_bytes="0"
-                local part
-                IFS='|' read -r -a fields <<< "$line"
-                for part in "${fields[@]}"; do
-                    case "$part" in
-                        state=*) state="${part#state=}" ;;
-                        index=*) idx="${part#index=}" ;;
-                        name=*) name="${part#name=}" ;;
-                        pct=*) pct="${part#pct=}" ;;
-                        speed=*) speed="${part#speed=}" ;;
-                        elapsed=*) elapsed="${part#elapsed=}" ;;
-                        out=*) out_bytes="${part#out=}" ;;
-                    esac
-                done
-
-                local bar
-                bar=$(render_progress_bar "$pct" 24)
-                local status_tag="RUN"
-                [ "$state" = "done" ] && status_tag="DONE"
-                [ "$state" = "fail" ] && status_tag="FAIL"
-                local out_txt
-                out_txt=$(format_bytes_dual "$out_bytes")
-                display_lines+=("[${status_tag}] [${bar}] ${pct}% | ${name} | speed ${speed} | t=${elapsed}s | out ${out_txt}")
-            done
-        fi
-
-        if [ "$previous_lines" -gt 0 ]; then
-            printf '\033[%sA' "$previous_lines"
-        fi
-
-        local printed=0
-        local dline
-        for dline in "${display_lines[@]}"; do
-            printf '\033[2K\r%s\n' "$dline"
-            ((printed++))
-        done
-        while [ "$printed" -lt "$previous_lines" ]; do
-            printf '\033[2K\r\n'
-            ((printed++))
-        done
-
-        previous_lines=${#display_lines[@]}
-
-        if [ -f "$stop_file" ]; then
-            break
-        fi
-
-        sleep 1
-    done
 }
 
 emit_parallel_progress_snapshots() {
@@ -799,11 +722,7 @@ run_batch_once() {
 
     mkdir -p "$progress_dir"
 
-    if [ "$FINAL_PARALLEL_JOBS" -gt 1 ] && [ "$FINAL_LIVE_PREVIEW" -eq 1 ] && [ -t 1 ]; then
-        echo "[INFO] Parallel dashboard enabled (${FINAL_PARALLEL_JOBS} jobs)."
-        render_parallel_dashboard "$progress_dir" "$progress_stop_file" &
-        renderer_pid=$!
-    elif [ "$FINAL_PARALLEL_JOBS" -gt 1 ] && [ "$FINAL_LIVE_PREVIEW" -eq 1 ]; then
+    if [ "$FINAL_PARALLEL_JOBS" -gt 1 ] && [ "$FINAL_LIVE_PREVIEW" -eq 1 ]; then
         echo "[INFO] Parallel snapshot mode enabled for non-interactive logs (${FINAL_PARALLEL_JOBS} jobs)."
         emit_parallel_progress_snapshots "$progress_dir" "$progress_stop_file" &
         renderer_pid=$!
