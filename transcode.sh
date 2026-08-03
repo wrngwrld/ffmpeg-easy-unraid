@@ -6,21 +6,6 @@
 
 shopt -s nullglob
 
-
-cat <<EOF
-${cmd_prefix[@]} \
--init_hw_device vaapi=va:/dev/dri/renderD128 \
--filter_hw_device va \
--vaapi_device /dev/dri/renderD128 \
--i "$input" \
--map 0 \
--vf "format=nv12,hwupload" \
--c:v hevc_vaapi \
--qp $QP_VALUE \
-$audio_sub_args \
-"$output"
-EOF
-
 # --- GLOBAL VARS ---
 METHOD="${ENCODE_METHOD:-cpu_h265}"
 THREADS_INPUT="${ENCODE_THREADS:-0}"
@@ -175,19 +160,7 @@ get_ffmpeg_cmd() {
         return 1
         ;;
         "intel_h265")
-        cat <<EOF
-        ${cmd_prefix[@]} \
-        -init_hw_device vaapi=va:/dev/dri/renderD128 \
-        -filter_hw_device va \
-        -vaapi_device /dev/dri/renderD128 \
-        -i "$input" \
-        -map 0 \
-        -vf "format=nv12,hwupload" \
-        -c:v hevc_vaapi \
-        -qp $QP_VALUE \
-        $audio_sub_args \
-        "$output"
-        EOF
+        echo "${cmd_prefix[@]} -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -vaapi_device /dev/dri/renderD128 -i \"$input\" -map 0 -vf \"format=nv12,hwupload\" -c:v hevc_vaapi -qp $QP_VALUE $audio_sub_args \"$output\""
         ;;
         "cpu_av1")     echo "${cmd_prefix[@]} -i \"$input\" $generic_thread_arg -map 0 -c:v libsvtav1 -crf $CRF_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
         *)             echo "${cmd_prefix[@]} -i \"$input\" $x265_safe_arg -map 0 -c:v libx265 -crf $CRF_VALUE -preset $PRESET $audio_sub_args \"$output\"" ;;
