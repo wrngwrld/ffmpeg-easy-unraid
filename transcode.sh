@@ -12,6 +12,7 @@ THREADS_INPUT="${ENCODE_THREADS:-0}"
 PRESET_INPUT="${ENCODE_PRESET:-default}"
 CUSTOM_ARGS="${FFMPEG_CUSTOM_ARGS:-}"
 MAP_ARGS="${ENCODE_MAP_ARGS:--map 0}"
+PARALLEL_JOBS_INPUT="${ENCODE_PARALLEL_JOBS:-1}"
 
 TARGET_UID="${UNRAID_UID:-99}"
 TARGET_GID="${UNRAID_GID:-100}"
@@ -26,6 +27,7 @@ CQ_VALUE=""
 QP_VALUE=""
 PRESET=""
 FINAL_THREADS=0
+FINAL_PARALLEL_JOBS=1
 START_TIME=$SECONDS
 SIZE_IN_TOTAL=0
 SIZE_OUT_TOTAL=0
@@ -89,10 +91,18 @@ configure_settings() {
             fi
         fi
     fi
+
+    # D) Parallel Job Count
+    if [[ "$PARALLEL_JOBS_INPUT" =~ ^[0-9]+$ ]] && [ "$PARALLEL_JOBS_INPUT" -ge 1 ]; then
+        FINAL_PARALLEL_JOBS="$PARALLEL_JOBS_INPUT"
+    else
+        echo "[WARN] Invalid ENCODE_PARALLEL_JOBS='$PARALLEL_JOBS_INPUT'. Falling back to 1."
+        FINAL_PARALLEL_JOBS=1
+    fi
 }
 
 check_paths() {
-    echo "[INIT] Method: $METHOD | Preset: $PRESET | CRF/CQ: $CRF_VALUE/$CQ_VALUE"
+    echo "[INIT] Method: $METHOD | Preset: $PRESET | CRF/CQ: $CRF_VALUE/$CQ_VALUE | Parallel Jobs: $FINAL_PARALLEL_JOBS"
     if [ ! -d "$SOURCE_DIR" ]; then echo "[FATAL] /import missing."; exit 1; fi
 
     local r_src; r_src=$(realpath "$SOURCE_DIR")
@@ -214,6 +224,68 @@ get_ffmpeg_cmd() {
     esac
 }
 
+process_one_file() {
+    local input_file="$1"
+    local index="$2"
+    local total="$3"
+    local result_file="$4"
+
+    local rel_path="${input_file#$SOURCE_DIR/}"
+    local fname_no_ext
+    fname_no_ext="$(basename -- "$input_file" | sed 's/\.[^.]*$//')"
+    local rel_dir
+    rel_dir=$(dirname "$rel_path")
+
+    local out_file="$EXPORT_DIR/$rel_dir/$fname_no_ext.mkv"
+    local finish_dest="$FINISHED_DIR/$rel_path"
+
+    echo ""
+    echo "[PROGRESS] File $index of $total"
+    echo "[START] Processing: $fname_no_ext"
+
+    mkdir -p "$(dirname "$out_file")"
+    chown "$TARGET_UID":"$TARGET_GID" "$(dirname "$out_file")"
+    [ -f "$out_file" ] && rm "$out_file"
+
+    local current_in_size
+    current_in_size=$(stat -c%s "$input_file")
+
+    local HDR_META
+    HDR_META=$(detect_hdr_metadata "$input_file")
+    local IS_HDR HDR_TRANSFER HDR_PRIMARIES HDR_COLORSPACE
+    IFS='|' read -r IS_HDR HDR_TRANSFER HDR_PRIMARIES HDR_COLORSPACE <<< "$HDR_META"
+
+    if [ "$IS_HDR" -eq 1 ]; then
+        echo "[INFO] HDR source detected (transfer=$HDR_TRANSFER, primaries=$HDR_PRIMARIES, colorspace=$HDR_COLORSPACE). Preserving HDR signaling."
+    fi
+
+    local CMD_STR
+    CMD_STR=$(get_ffmpeg_cmd "$input_file" "$out_file" "$IS_HDR" "$HDR_TRANSFER" "$HDR_PRIMARIES" "$HDR_COLORSPACE")
+
+    eval "$CMD_STR 2> >(grep -v -e 'Failed to set thread priority' -e 'set_mempolicy' >&2)"
+
+    if [ $? -eq 0 ]; then
+        local current_out_size
+        current_out_size=$(stat -c%s "$out_file")
+
+        echo "[DONE] Encoding success."
+        echo "DONE: $rel_path" >> "$LOG_FILE"
+        chown "$TARGET_UID":"$TARGET_GID" "$out_file"
+        chmod 666 "$out_file"
+
+        echo "[MOVE] Source -> Finished"
+        mkdir -p "$(dirname "$finish_dest")"
+        chown "$TARGET_UID":"$TARGET_GID" "$(dirname "$finish_dest")"
+        mv "$input_file" "$finish_dest"
+
+        printf 'SUCCESS|%s|%s|%s\n' "$current_in_size" "$current_out_size" "$rel_path" > "$result_file"
+    else
+        echo "[FAIL] Error processing $rel_path"
+        [ -f "$out_file" ] && rm "$out_file"
+        printf 'FAIL|%s|0|%s\n' "$current_in_size" "$rel_path" > "$result_file"
+    fi
+}
+
 # FIX: Switch from 'bc' to 'awk' for proper formatting (0.48 instead of .48)
 format_bytes_dual() {
     local bytes=$1
@@ -254,57 +326,38 @@ echo "--------------------------------------------------------"
 
 COUNT_SUCCESS=0; COUNT_FAILED=0
 CURRENT_INDEX=0
+RESULT_DIR=$(mktemp -d /tmp/ffmpeg-easy-results.XXXXXX)
 
 for input_file in "${FILES[@]}"; do
     ((CURRENT_INDEX++))
-    
-    rel_path="${input_file#$SOURCE_DIR/}"
-    fname_no_ext="$(basename -- "$input_file" | sed 's/\.[^.]*$//')"
-    rel_dir=$(dirname "$rel_path")
-    
-    out_file="$EXPORT_DIR/$rel_dir/$fname_no_ext.mkv"
-    finish_dest="$FINISHED_DIR/$rel_path"
-
-    echo ""
-    echo "[PROGRESS] File $CURRENT_INDEX of $TOTAL_FILES"
-    echo "[START] Processing: $fname_no_ext"
-    
-    mkdir -p "$(dirname "$out_file")"
-    chown "$TARGET_UID":"$TARGET_GID" "$(dirname "$out_file")"
-    [ -f "$out_file" ] && rm "$out_file"
-
-    current_in_size=$(stat -c%s "$input_file")
-    HDR_META=$(detect_hdr_metadata "$input_file")
-    IFS='|' read -r IS_HDR HDR_TRANSFER HDR_PRIMARIES HDR_COLORSPACE <<< "$HDR_META"
-
-    if [ "$IS_HDR" -eq 1 ]; then
-        echo "[INFO] HDR source detected (transfer=$HDR_TRANSFER, primaries=$HDR_PRIMARIES, colorspace=$HDR_COLORSPACE). Preserving HDR signaling."
-    fi
-    
-    CMD_STR=$(get_ffmpeg_cmd "$input_file" "$out_file" "$IS_HDR" "$HDR_TRANSFER" "$HDR_PRIMARIES" "$HDR_COLORSPACE")
-    
-    eval "$CMD_STR 2> >(grep -v -e 'Failed to set thread priority' -e 'set_mempolicy' >&2)"
-
-    if [ $? -eq 0 ]; then
-        echo "[DONE] Encoding success."
-        echo "DONE: $rel_path" >> "$LOG_FILE"
-        current_out_size=$(stat -c%s "$out_file")
-        SIZE_IN_TOTAL=$(echo "$SIZE_IN_TOTAL + $current_in_size" | bc)
-        SIZE_OUT_TOTAL=$(echo "$SIZE_OUT_TOTAL + $current_out_size" | bc)
-        chown "$TARGET_UID":"$TARGET_GID" "$out_file"
-        chmod 666 "$out_file"
-        
-        echo "[MOVE] Source -> Finished"
-        mkdir -p "$(dirname "$finish_dest")"
-        chown "$TARGET_UID":"$TARGET_GID" "$(dirname "$finish_dest")"
-        mv "$input_file" "$finish_dest"
-        ((COUNT_SUCCESS++))
+    if [ "$FINAL_PARALLEL_JOBS" -le 1 ]; then
+        process_one_file "$input_file" "$CURRENT_INDEX" "$TOTAL_FILES" "$RESULT_DIR/$CURRENT_INDEX.result"
     else
-        echo "[FAIL] Error processing $rel_path"
-        [ -f "$out_file" ] && rm "$out_file"
+        process_one_file "$input_file" "$CURRENT_INDEX" "$TOTAL_FILES" "$RESULT_DIR/$CURRENT_INDEX.result" &
+        while [ "$(jobs -rp | wc -l)" -ge "$FINAL_PARALLEL_JOBS" ]; do
+            wait -n
+        done
+    fi
+done
+
+if [ "$FINAL_PARALLEL_JOBS" -gt 1 ]; then
+    wait
+fi
+
+for result in "$RESULT_DIR"/*.result; do
+    [ -f "$result" ] || continue
+    IFS='|' read -r status in_size out_size rel_path < "$result"
+
+    if [ "$status" = "SUCCESS" ]; then
+        ((COUNT_SUCCESS++))
+        SIZE_IN_TOTAL=$(echo "$SIZE_IN_TOTAL + $in_size" | bc)
+        SIZE_OUT_TOTAL=$(echo "$SIZE_OUT_TOTAL + $out_size" | bc)
+    else
         ((COUNT_FAILED++))
     fi
 done
+
+rm -rf "$RESULT_DIR"
 
 DURATION=$((SECONDS - START_TIME))
 H=$((DURATION/3600)); M=$(( (DURATION%3600)/60 )); S=$((DURATION%60))
