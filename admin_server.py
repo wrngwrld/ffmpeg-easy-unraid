@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 
 ROOT = Path("/opt/ffmpeg-easy/web")
@@ -118,6 +119,43 @@ def count_queue_files() -> int:
             if Path(name).suffix.lower() in MEDIA_EXTENSIONS:
                 total += 1
     return total
+
+
+def list_queue_items() -> list[dict]:
+    if not IMPORT_DIR.exists():
+        return []
+
+    items: list[dict] = []
+    for current_root, dirs, files in os.walk(IMPORT_DIR):
+        current_path = Path(current_root)
+        if current_path == FINISHED_DIR:
+            dirs[:] = []
+            continue
+
+        dirs[:] = [entry for entry in dirs if (current_path / entry) != FINISHED_DIR]
+        for name in files:
+            file_path = current_path / name
+            if file_path.name.startswith("."):
+                continue
+            if file_path.suffix.lower() not in MEDIA_EXTENSIONS:
+                continue
+
+            try:
+                stat = file_path.stat()
+            except OSError:
+                continue
+
+            relative_path = str(file_path.relative_to(IMPORT_DIR))
+            items.append(
+                {
+                    "relativePath": relative_path,
+                    "sizeBytes": int(stat.st_size),
+                    "modifiedAt": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                }
+            )
+
+    items.sort(key=lambda item: natural_sort_key(item["relativePath"]))
+    return items
 
 
 def format_duration(seconds: float | None) -> str:
@@ -312,7 +350,11 @@ class AdminHandler(SimpleHTTPRequestHandler):
         return str(resolved)
 
     def do_GET(self):
-        if self.path.startswith("/api/status"):
+        parsed_url = urlparse(self.path)
+        query = parse_qs(parsed_url.query)
+        path = parsed_url.path
+
+        if path == "/api/status":
             payload = read_status()
             stats_payload = read_stats()
             queue_count = count_queue_files()
@@ -330,7 +372,49 @@ class AdminHandler(SimpleHTTPRequestHandler):
             self.send_json(payload)
             return
 
-        if self.path.startswith("/api/rules"):
+        if path == "/api/queue":
+            items = list_queue_items()
+            self.send_json(
+                {
+                    "count": len(items),
+                    "items": items,
+                    "servedAt": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            return
+
+        if path == "/api/history":
+            stats_payload = read_stats()
+            all_items = stats_payload.get("recentFiles", [])
+            if not isinstance(all_items, list):
+                all_items = []
+
+            try:
+                limit = max(1, min(1000, int(query.get("limit", ["200"])[0])))
+            except (TypeError, ValueError):
+                limit = 200
+
+            try:
+                offset = max(0, int(query.get("offset", ["0"])[0]))
+            except (TypeError, ValueError):
+                offset = 0
+
+            total = len(all_items)
+            items = all_items[offset : offset + limit]
+            self.send_json(
+                {
+                    "total": total,
+                    "offset": offset,
+                    "limit": limit,
+                    "items": items,
+                    "totals": stats_payload.get("totals", {}),
+                    "updatedAt": stats_payload.get("updatedAt", ""),
+                    "servedAt": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            return
+
+        if path == "/api/rules":
             self.send_json(read_rules())
             return
 

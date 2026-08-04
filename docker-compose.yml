@@ -1,7 +1,9 @@
 services:
   ffmpeg-easy:
     container_name: ffmpeg-easy-unraid
-    image: metronade/ffmpeg-easy-unraid:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
 
     # IMPORTANT: Set to "no" because this container stops after processing
     # the queue ("Run-Once" workflow).
@@ -33,8 +35,8 @@ services:
 
     volumes:
       # Adjust the paths on the left side to match your host directories
-      - /path/to/your/media:/import
-      - /path/to/output/folder:/export
+      - ./import:/import
+      - ./export:/export
 
     ports:
       - "8080:8080" # Admin page

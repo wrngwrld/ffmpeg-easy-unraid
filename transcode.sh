@@ -216,7 +216,7 @@ recent_files = payload.get("recentFiles", [])
 if not isinstance(recent_files, list):
     recent_files = []
 recent_files.insert(0, entry)
-recent_files = recent_files[:100]
+recent_files = recent_files[:5000]
 
 payload["updatedAt"] = datetime.now(timezone.utc).isoformat()
 payload["totals"] = {

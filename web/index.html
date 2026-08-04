@@ -13,247 +13,477 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="noise"></div>
-    <div class="orb orb-1"></div>
-    <div class="orb orb-2"></div>
-    <div class="orb orb-3"></div>
+    <div id="app" v-cloak>
+      <div class="noise"></div>
+      <div class="orb orb-1"></div>
+      <div class="orb orb-2"></div>
+      <div class="orb orb-3"></div>
 
-    <nav class="topbar">
-      <div class="topbar-inner">
-        <a class="brand" href="#overview">
-          <span class="brand-mark">FF</span>
-          <span>FFmpeg<span class="brand-accent">Easy</span></span>
-        </a>
-        <div class="topbar-links">
-          <a href="#overview">Overview</a>
-          <a href="#jobs">Jobs</a>
-          <a href="#runtime">Runtime</a>
-        </div>
-      </div>
-    </nav>
-
-    <main class="shell">
-      <section class="hero" id="overview">
-        <div class="hero-bg"></div>
-        <div class="hero-content panel">
-          <div class="hero-copy">
-            <div class="tag">
-              <span class="tag-dot"></span>
-              FFmpeg Easy Unraid
-            </div>
-            <h1>
-              Transcode Admin.<br /><span class="gradient-text"
-                >Liquid, live, readable.</span
-              >
-            </h1>
-            <p class="lede">
-              A darker, calmer control surface for queue depth, active encode
-              workers, and the current batch state without digging through raw
-              container logs.
-            </p>
-            <div class="hero-inline">
-              <span id="state-pill" class="pill">Loading</span>
-              <p id="last-updated" class="muted">Waiting for runtime state…</p>
-            </div>
-          </div>
-
-          <div class="hero-glass">
-            <div class="mini-card">
-              <p class="mini-label">Method</p>
-              <p id="status-method" class="mini-value">intel_h265</p>
-            </div>
-            <div class="mini-card wide">
-              <p class="mini-label">Message</p>
-              <p id="status-message" class="mini-message">
-                Waiting for runtime state…
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="marquee-section panel">
-        <div class="marquee-track">
-          <span class="marquee-item"
-            ><span class="marquee-dot"></span>Live Queue Depth</span
+      <nav class="topbar">
+        <div class="topbar-inner">
+          <a
+            class="brand"
+            href="#overview"
+            @click.prevent="switchView('overview')"
           >
-          <span class="marquee-item"
-            ><span class="marquee-dot"></span>Active Encode Workers</span
-          >
-          <span class="marquee-item"
-            ><span class="marquee-dot"></span>Watch Mode Status</span
-          >
-          <span class="marquee-item"
-            ><span class="marquee-dot"></span>Batch Health</span
-          >
-          <span class="marquee-item"
-            ><span class="marquee-dot"></span>QP Tracking</span
-          >
-          <span class="marquee-item"
-            ><span class="marquee-dot"></span>Live Queue Depth</span
-          >
-          <span class="marquee-item"
-            ><span class="marquee-dot"></span>Active Encode Workers</span
-          >
-          <span class="marquee-item"
-            ><span class="marquee-dot"></span>Watch Mode Status</span
-          >
-          <span class="marquee-item"
-            ><span class="marquee-dot"></span>Batch Health</span
-          >
-          <span class="marquee-item"
-            ><span class="marquee-dot"></span>QP Tracking</span
-          >
-        </div>
-      </section>
-
-      <section class="stats-grid">
-        <article class="stat-card panel accent-cyan">
-          <p class="label">Queue</p>
-          <p id="queue-count" class="value">0</p>
-          <p class="caption">files waiting in /import</p>
-        </article>
-        <article class="stat-card panel accent-indigo">
-          <p class="label">Parallel Jobs</p>
-          <p id="parallel-jobs" class="value">0</p>
-          <p class="caption">configured worker slots</p>
-        </article>
-        <article class="stat-card panel accent-coral">
-          <p class="label">QP</p>
-          <p id="qp-value" class="value">0</p>
-          <p class="caption">constant quality target</p>
-        </article>
-        <article class="stat-card panel accent-olive">
-          <p class="label">Watch Mode</p>
-          <p id="watch-mode" class="value">Off</p>
-          <p class="caption">continuous intake status</p>
-        </article>
-      </section>
-
-      <section class="content-grid">
-        <article class="panel jobs-panel" id="jobs">
-          <div class="panel-head">
-            <div>
-              <div class="tag small-tag">
-                <span class="tag-dot"></span>Live Jobs
-              </div>
-              <h2>Active Encodes</h2>
-              <p class="panel-sub">
-                Current worker slots with progress, speed, and elapsed runtime.
-              </p>
-            </div>
-            <p id="jobs-summary" class="muted">No active workers</p>
-          </div>
-          <div id="jobs-list" class="jobs-list empty-state">
-            No active jobs yet.
-          </div>
-        </article>
-
-        <article class="panel runtime-panel" id="runtime">
-          <div class="panel-head">
-            <div>
-              <div class="tag small-tag">
-                <span class="tag-dot"></span>Runtime
-              </div>
-              <h2>Batch Snapshot</h2>
-              <p class="panel-sub">
-                A compact state view for the current or most recent run.
-              </p>
-            </div>
-          </div>
-          <dl class="details-list">
-            <div>
-              <dt>Batch Total</dt>
-              <dd id="batch-total">0</dd>
-            </div>
-            <div>
-              <dt>Queue ETA</dt>
-              <dd id="queue-eta">Estimating…</dd>
-            </div>
-            <div>
-              <dt>Processed</dt>
-              <dd id="batch-processed">0</dd>
-            </div>
-            <div>
-              <dt>Succeeded</dt>
-              <dd id="batch-succeeded">0</dd>
-            </div>
-            <div>
-              <dt>Failed</dt>
-              <dd id="batch-failed">0</dd>
-            </div>
-            <div>
-              <dt>Total Saved</dt>
-              <dd id="stats-total-saved">0 B</dd>
-            </div>
-            <div>
-              <dt>Total Input</dt>
-              <dd id="stats-total-input">0 B</dd>
-            </div>
-            <div>
-              <dt>Total Output</dt>
-              <dd id="stats-total-output">0 B</dd>
-            </div>
-            <div>
-              <dt>Avg Saved %</dt>
-              <dd id="stats-avg-saved">0.00%</dd>
-            </div>
-          </dl>
-
-          <div class="panel-head">
-            <div>
-              <h2>Recent Files</h2>
-              <p class="panel-sub">
-                Latest transcodes with per-file space savings.
-              </p>
-            </div>
-          </div>
-          <div id="recent-files" class="jobs-list empty-state">
-            No files processed yet.
-          </div>
-
-          <div class="action-block">
-            <button id="rescan-button" class="action-button" type="button">
-              Rescan Now
+            <span class="brand-mark">FF</span>
+            <span>FFmpeg<span class="brand-accent">Easy</span></span>
+          </a>
+          <div class="topbar-links">
+            <button
+              class="view-link"
+              :class="{ 'is-active': currentView === 'overview' }"
+              type="button"
+              @click="switchView('overview')"
+            >
+              Overview
             </button>
-            <p id="action-feedback" class="action-feedback muted">
-              Wake the watcher immediately when new files were copied into
-              /import.
+            <button
+              class="view-link"
+              :class="{ 'is-active': currentView === 'queue' }"
+              type="button"
+              @click="switchView('queue')"
+            >
+              Queue
+            </button>
+            <button
+              class="view-link"
+              :class="{ 'is-active': currentView === 'history' }"
+              type="button"
+              @click="switchView('history')"
+            >
+              History
+            </button>
+            <button
+              class="view-link"
+              :class="{ 'is-active': currentView === 'system' }"
+              type="button"
+              @click="switchView('system')"
+            >
+              System
+            </button>
+          </div>
+        </div>
+      </nav>
+
+      <main class="shell">
+        <section class="panel status-strip">
+          <div class="status-left">
+            <span class="pill" :data-state="status.state || 'unknown'"
+              >{{ stateLabel(status.state) }}</span
+            >
+            <p class="muted">{{ lastUpdatedText }}</p>
+          </div>
+          <div class="status-right">
+            <p class="mono-item">
+              <span>Method</span
+              ><strong>{{ status.method || 'intel_h265' }}</strong>
+            </p>
+            <p class="mono-item">
+              <span>State</span
+              ><strong
+                >{{ status.message || 'Waiting for runtime state' }}</strong
+              >
             </p>
           </div>
-        </article>
-      </section>
+        </section>
 
-      <section class="panel rules-panel" id="rules">
-        <div class="panel-head">
-          <div>
-            <div class="tag small-tag">
-              <span class="tag-dot"></span>Folder Rules
+        <section
+          class="view-panel"
+          :class="{ 'is-active': currentView === 'overview' }"
+        >
+          <section class="stats-grid">
+            <article class="stat-card panel accent-cyan">
+              <p class="label">Queue</p>
+              <p class="value">{{ status.queueCount ?? 0 }}</p>
+              <p class="caption">files waiting in /import</p>
+            </article>
+            <article class="stat-card panel accent-indigo">
+              <p class="label">Parallel Jobs</p>
+              <p class="value">{{ status.parallelJobs ?? 0 }}</p>
+              <p class="caption">configured worker slots</p>
+            </article>
+            <article class="stat-card panel accent-coral">
+              <p class="label">QP</p>
+              <p class="value">{{ status.qp ?? 0 }}</p>
+              <p class="caption">constant quality target</p>
+            </article>
+            <article class="stat-card panel accent-olive">
+              <p class="label">Watch Mode</p>
+              <p class="value">
+                {{ Number(status.watchMode) === 1 ? 'On' : 'Off' }}
+              </p>
+              <p class="caption">continuous intake status</p>
+            </article>
+          </section>
+
+          <section class="content-grid">
+            <article class="panel jobs-panel">
+              <div class="panel-head">
+                <div>
+                  <div class="tag small-tag">
+                    <span class="tag-dot"></span>Live Jobs
+                  </div>
+                  <h2>Active Encodes</h2>
+                  <p class="panel-sub">
+                    Current worker slots with progress, speed, and elapsed
+                    runtime.
+                  </p>
+                </div>
+                <p class="muted">{{ jobsSummary }}</p>
+              </div>
+
+              <div v-if="!activeJobs.length" class="jobs-list empty-state">
+                No active jobs right now.
+              </div>
+              <div v-else class="jobs-list">
+                <article
+                  v-for="job in activeJobs"
+                  :key="`job-${job.index}-${job.name}`"
+                  class="job-card"
+                >
+                  <div class="job-head">
+                    <div>
+                      <p class="job-index">
+                        Job #{{ String(job.index || 0).padStart(2, '0') }}
+                      </p>
+                      <h3 :title="job.name || 'Unnamed file'">
+                        {{ job.name || "Unnamed file" }}
+                      </h3>
+                    </div>
+                    <span class="job-speed">{{ job.speed || "n/a" }}</span>
+                  </div>
+                  <div class="job-bar-track">
+                    <div
+                      class="job-bar-fill"
+                      :style="{ width: `${jobPct(job)}%` }"
+                    ></div>
+                  </div>
+                  <div class="job-meta">
+                    <span>{{ jobPct(job).toFixed(2) }}%</span>
+                    <span>{{ Number(job.elapsed || 0) }}s elapsed</span>
+                  </div>
+                </article>
+              </div>
+            </article>
+
+            <article class="panel runtime-panel">
+              <div class="panel-head">
+                <div>
+                  <div class="tag small-tag">
+                    <span class="tag-dot"></span>Runtime
+                  </div>
+                  <h2>Batch Snapshot</h2>
+                  <p class="panel-sub">
+                    A compact state view for the current or most recent run.
+                  </p>
+                </div>
+              </div>
+              <dl class="details-list">
+                <div>
+                  <dt>Batch Total</dt>
+                  <dd>{{ status.batchTotal ?? 0 }}</dd>
+                </div>
+                <div>
+                  <dt>Queue ETA</dt>
+                  <dd>{{ status.queueEtaLabel || 'Estimating…' }}</dd>
+                </div>
+                <div>
+                  <dt>Processed</dt>
+                  <dd>{{ status.batchProcessed ?? 0 }}</dd>
+                </div>
+                <div>
+                  <dt>Succeeded</dt>
+                  <dd>{{ status.batchSucceeded ?? 0 }}</dd>
+                </div>
+                <div>
+                  <dt>Failed</dt>
+                  <dd>{{ status.batchFailed ?? 0 }}</dd>
+                </div>
+                <div>
+                  <dt>Total Saved</dt>
+                  <dd>{{ formatBytes(statsTotals.savedBytes) }}</dd>
+                </div>
+                <div>
+                  <dt>Total Input</dt>
+                  <dd>{{ formatBytes(statsTotals.inputBytes) }}</dd>
+                </div>
+                <div>
+                  <dt>Total Output</dt>
+                  <dd>{{ formatBytes(statsTotals.outputBytes) }}</dd>
+                </div>
+                <div>
+                  <dt>Avg Saved %</dt>
+                  <dd>{{ formatPercent(statsTotals.avgSavedPercent) }}</dd>
+                </div>
+              </dl>
+
+              <div class="panel-head compact-head">
+                <div><h2>Recent Files</h2></div>
+              </div>
+              <div v-if="!recentFiles.length" class="jobs-list empty-state">
+                No files processed yet.
+              </div>
+              <div v-else class="jobs-list">
+                <article
+                  v-for="item in recentFiles.slice(0, 6)"
+                  :key="`recent-${item.timestamp}-${item.relativePath}`"
+                  class="job-card compact-card"
+                >
+                  <div class="job-head">
+                    <div>
+                      <p class="job-index">
+                        {{ item.status === 'failed' ? 'Failed' : 'Succeeded' }}
+                      </p>
+                      <h3 :title="item.relativePath || 'unknown'">
+                        {{ item.relativePath || "unknown" }}
+                      </h3>
+                    </div>
+                    <span class="job-speed"
+                      >{{ formatPercent(item.savedPercent) }}</span
+                    >
+                  </div>
+                  <div class="job-meta">
+                    <span>Saved {{ formatBytes(item.savedBytes) }}</span>
+                    <span>{{ formatDateTime(item.timestamp) }}</span>
+                  </div>
+                </article>
+              </div>
+            </article>
+          </section>
+        </section>
+
+        <section
+          class="view-panel"
+          :class="{ 'is-active': currentView === 'queue' }"
+        >
+          <article class="panel jobs-panel">
+            <div class="panel-head">
+              <div>
+                <div class="tag small-tag">
+                  <span class="tag-dot"></span>Queue Browser
+                </div>
+                <h2>Queued Items</h2>
+                <p class="panel-sub">
+                  Everything currently waiting in /import.
+                </p>
+              </div>
+              <p class="muted">
+                {{ queueItems.length }} queued file{{ queueItems.length === 1 ?
+                '' : 's' }}
+              </p>
             </div>
-            <h2>Per-Folder QP Overrides</h2>
-            <p class="panel-sub">
-              Match a folder prefix under /import and apply a different QP for
-              everything inside it.
-            </p>
-          </div>
-          <p id="rules-summary" class="muted">0 active rules</p>
-        </div>
+            <div v-if="!queueItems.length" class="jobs-list empty-state">
+              Queue is empty.
+            </div>
+            <div v-else class="jobs-list">
+              <article
+                v-for="item in queueItems"
+                :key="`queue-${item.relativePath}`"
+                class="job-card compact-card"
+              >
+                <div class="job-head">
+                  <div>
+                    <p class="job-index">Queued</p>
+                    <h3 :title="item.relativePath || 'unknown'">
+                      {{ item.relativePath || "unknown" }}
+                    </h3>
+                  </div>
+                  <span class="job-speed"
+                    >{{ formatBytes(item.sizeBytes) }}</span
+                  >
+                </div>
+                <div class="job-meta">
+                  <span>Modified {{ formatDateTime(item.modifiedAt) }}</span>
+                </div>
+              </article>
+            </div>
+          </article>
+        </section>
 
-        <div id="rules-list" class="rules-list"></div>
+        <section
+          class="view-panel"
+          :class="{ 'is-active': currentView === 'history' }"
+        >
+          <article class="panel jobs-panel">
+            <div class="panel-head">
+              <div>
+                <div class="tag small-tag">
+                  <span class="tag-dot"></span>History
+                </div>
+                <h2>Transcode History</h2>
+                <p class="panel-sub">
+                  Full processed history with per-file savings and outcomes.
+                </p>
+              </div>
+              <p class="muted">{{ historyTotal }} total entries</p>
+            </div>
+            <section class="history-totals">
+              <article class="mini-card">
+                <p class="mini-label">Total Saved</p>
+                <p class="mini-value">
+                  {{ formatBytes(historyTotals.savedBytes) }}
+                </p>
+              </article>
+              <article class="mini-card">
+                <p class="mini-label">Processed</p>
+                <p class="mini-value">{{ historyTotals.processed ?? 0 }}</p>
+              </article>
+              <article class="mini-card">
+                <p class="mini-label">Succeeded</p>
+                <p class="mini-value">{{ historyTotals.succeeded ?? 0 }}</p>
+              </article>
+              <article class="mini-card">
+                <p class="mini-label">Failed</p>
+                <p class="mini-value">{{ historyTotals.failed ?? 0 }}</p>
+              </article>
+            </section>
+            <div v-if="!historyItems.length" class="jobs-list empty-state">
+              No transcodes yet.
+            </div>
+            <div v-else class="jobs-list">
+              <article
+                v-for="item in historyItems"
+                :key="`history-${item.timestamp}-${item.relativePath}`"
+                class="job-card compact-card"
+              >
+                <div class="job-head">
+                  <div>
+                    <p class="job-index">
+                      {{ item.status === 'failed' ? 'Failed' : 'Succeeded' }}
+                    </p>
+                    <h3 :title="item.relativePath || 'unknown'">
+                      {{ item.relativePath || "unknown" }}
+                    </h3>
+                  </div>
+                  <span class="job-speed"
+                    >{{ formatPercent(item.savedPercent) }}</span
+                  >
+                </div>
+                <div class="job-meta history-meta">
+                  <span>Saved {{ formatBytes(item.savedBytes) }}</span>
+                  <span
+                    >In {{ formatBytes(item.inputBytes) }} | Out {{
+                    formatBytes(item.outputBytes) }}</span
+                  >
+                  <span>{{ formatDateTime(item.timestamp) }}</span>
+                </div>
+              </article>
+            </div>
+          </article>
+        </section>
 
-        <div class="rules-actions">
-          <button id="add-rule-button" class="ghost-button" type="button">
-            Add Rule
-          </button>
-          <button id="save-rules-button" class="action-button" type="button">
-            Save Rules
-          </button>
-        </div>
-        <p id="rules-feedback" class="action-feedback muted">
-          Example prefix: Anime/Season 1 or Movies/4K
-        </p>
-      </section>
-    </main>
+        <section
+          class="view-panel"
+          :class="{ 'is-active': currentView === 'system' }"
+        >
+          <section class="content-grid">
+            <article class="panel runtime-panel">
+              <div class="panel-head">
+                <div>
+                  <div class="tag small-tag">
+                    <span class="tag-dot"></span>Actions
+                  </div>
+                  <h2>Runtime Actions</h2>
+                  <p class="panel-sub">
+                    Trigger scanner and inspect service state.
+                  </p>
+                </div>
+              </div>
+              <div class="action-block no-top-border">
+                <button
+                  class="action-button"
+                  type="button"
+                  :disabled="rescanBusy"
+                  @click="triggerRescan"
+                >
+                  Rescan Now
+                </button>
+                <p
+                  class="action-feedback"
+                  :class="feedbackClass(actionFeedbackKind)"
+                >
+                  {{ actionFeedbackText }}
+                </p>
+              </div>
+            </article>
+
+            <article class="panel rules-panel">
+              <div class="panel-head">
+                <div>
+                  <div class="tag small-tag">
+                    <span class="tag-dot"></span>Folder Rules
+                  </div>
+                  <h2>Per-Folder QP Overrides</h2>
+                  <p class="panel-sub">
+                    Match a folder prefix under /import and apply a different QP
+                    for everything inside it.
+                  </p>
+                </div>
+                <p class="muted">
+                  {{ rules.length }} active rule{{ rules.length === 1 ? '' : 's'
+                  }}
+                </p>
+              </div>
+
+              <div class="rules-list">
+                <div v-if="!rules.length" class="empty-state">
+                  No folder-specific QP rules yet.
+                </div>
+                <div
+                  v-for="(rule, index) in rules"
+                  :key="`rule-${index}`"
+                  class="rule-row"
+                >
+                  <input
+                    class="rule-input"
+                    type="text"
+                    placeholder="Anime/Season 1"
+                    v-model="rule.pathPrefix"
+                  />
+                  <input
+                    class="rule-number"
+                    type="number"
+                    min="0"
+                    max="51"
+                    step="1"
+                    v-model.number="rule.qp"
+                  />
+                  <button
+                    class="rule-remove"
+                    type="button"
+                    @click="removeRule(index)"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+
+              <div class="rules-actions">
+                <button class="ghost-button" type="button" @click="addRule">
+                  Add Rule
+                </button>
+                <button
+                  class="action-button"
+                  type="button"
+                  :disabled="saveRulesBusy"
+                  @click="saveRules"
+                >
+                  Save Rules
+                </button>
+              </div>
+              <p
+                class="action-feedback"
+                :class="feedbackClass(rulesFeedbackKind)"
+              >
+                {{ rulesFeedbackText }}
+              </p>
+            </article>
+          </section>
+        </section>
+      </main>
+    </div>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>
