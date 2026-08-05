@@ -10,6 +10,39 @@ import type {
   SubtitleMode,
 } from "../types.ts";
 
+type QueueConflictReason = "exists" | "active";
+
+interface QueueConflictItem {
+  sourcePath: string;
+  outputPath: string;
+  reason: QueueConflictReason;
+}
+
+export interface QueueApiErrorBody {
+  error?: string;
+  reason?: QueueConflictReason;
+  outputPath?: string;
+  conflictCount?: number;
+  conflicts?: QueueConflictItem[];
+}
+
+export class QueueRequestError extends Error {
+  status: number;
+  body: QueueApiErrorBody;
+
+  constructor(status: number, body: QueueApiErrorBody) {
+    super(body.error ?? `HTTP ${status}`);
+    this.name = "QueueRequestError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
+async function throwQueueError(res: Response): Promise<never> {
+  const body = (await res.json().catch(() => ({}))) as QueueApiErrorBody;
+  throw new QueueRequestError(res.status, body);
+}
+
 export const useQueueStore = defineStore("queue", () => {
   const status = useStatusStore();
 
@@ -60,6 +93,7 @@ export const useQueueStore = defineStore("queue", () => {
     audioMode: AudioMode,
     subtitleMode: SubtitleMode,
     batchName?: string,
+    overwriteExisting?: boolean,
   ): Promise<void> {
     const res = await fetch("/api/transcode", {
       method: "POST",
@@ -73,11 +107,11 @@ export const useQueueStore = defineStore("queue", () => {
         audioMode,
         subtitleMode,
         batchName,
+        overwriteExisting,
       }),
     });
     if (!res.ok) {
-      const err = (await res.json().catch(() => ({}))) as { error?: string };
-      throw new Error(err.error ?? `HTTP ${res.status}`);
+      await throwQueueError(res);
     }
   }
 
@@ -89,6 +123,7 @@ export const useQueueStore = defineStore("queue", () => {
     audioMode: AudioMode,
     subtitleMode: SubtitleMode,
     batchName?: string,
+    overwriteExisting?: boolean,
   ): Promise<number> {
     const res = await fetch("/api/transcode/folder", {
       method: "POST",
@@ -101,11 +136,11 @@ export const useQueueStore = defineStore("queue", () => {
         audioMode,
         subtitleMode,
         batchName,
+        overwriteExisting,
       }),
     });
     if (!res.ok) {
-      const err = (await res.json().catch(() => ({}))) as { error?: string };
-      throw new Error(err.error ?? `HTTP ${res.status}`);
+      await throwQueueError(res);
     }
     const payload = (await res.json()) as { queued?: number };
     return payload.queued ?? 0;

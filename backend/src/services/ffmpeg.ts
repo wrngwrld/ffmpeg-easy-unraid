@@ -374,6 +374,8 @@ export interface SpawnOptions {
 
 export interface TranscodeHandle {
   kill: () => void;
+  pause: () => void;
+  resume: () => void;
   done: Promise<void>;
 }
 
@@ -546,7 +548,33 @@ export function spawnTranscode({
   });
 
   return {
-    kill: () => proc.kill("SIGTERM"),
+    kill: () => {
+      // Ensure a previously paused process can receive termination promptly.
+      if (process.platform !== "win32") {
+        try {
+          proc.kill("SIGCONT");
+        } catch {
+          /* ignore */
+        }
+      }
+      proc.kill("SIGTERM");
+    },
+    pause: () => {
+      if (process.platform === "win32") return;
+      try {
+        proc.kill("SIGSTOP");
+      } catch {
+        /* ignore */
+      }
+    },
+    resume: () => {
+      if (process.platform === "win32") return;
+      try {
+        proc.kill("SIGCONT");
+      } catch {
+        /* ignore */
+      }
+    },
     done,
   };
 }

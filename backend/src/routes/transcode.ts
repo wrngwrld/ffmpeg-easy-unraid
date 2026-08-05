@@ -18,11 +18,12 @@ import {
 import type {
   AudioMode,
   EncoderChoice,
+  Job,
   StreamSelection,
   SubtitleMode,
   StreamMapSelection,
 } from "../services/jobQueue.js";
-import { MEDIA_DIR, MEDIA_EXTENSIONS } from "../config.js";
+import { EXPORT_DIR, MEDIA_DIR, MEDIA_EXTENSIONS } from "../config.js";
 import { readSettings } from "../services/settings.js";
 import {
   appendBatchJobs,
@@ -36,6 +37,7 @@ import {
 interface TranscodeBody {
   sourcePath: string;
   batchName?: string;
+  overwriteExisting?: boolean;
   qp?: number;
   encoder?: string;
   streamSelection?: string;
@@ -51,6 +53,7 @@ interface TranscodeBody {
 interface TranscodeFolderBody {
   folderPath: string;
   batchName?: string;
+  overwriteExisting?: boolean;
   qp?: number;
   encoder?: string;
   streamSelection?: string;
@@ -156,6 +159,38 @@ function safePath(reqPath: string): string | null {
   return abs;
 }
 
+function outputPathFor(sourcePath: string): string {
+  const { dir, name } = path.parse(sourcePath);
+  return path.join(dir, name + ".mkv");
+}
+
+function buildActiveOutputSet(jobs: Job[]): Set<string> {
+  return new Set(
+    jobs
+      .filter((job) => job.state === "queued" || job.state === "running")
+      .map((job) => job.outputPath),
+  );
+}
+
+function checkOutputConflict(
+  sourcePath: string,
+  activeOutputs: Set<string>,
+  overwriteExisting: boolean,
+): { outputPath: string; reason: "exists" | "active" } | null {
+  const outputPath = outputPathFor(sourcePath);
+
+  if (activeOutputs.has(outputPath)) {
+    return { outputPath, reason: "active" };
+  }
+
+  const outputAbs = path.join(EXPORT_DIR, outputPath);
+  if (!overwriteExisting && fs.existsSync(outputAbs)) {
+    return { outputPath, reason: "exists" };
+  }
+
+  return null;
+}
+
 function collectMediaFiles(absFolder: string): string[] {
   const files: string[] = [];
   const stack = [absFolder];
@@ -259,6 +294,7 @@ const transcodeRoute: FastifyPluginAsync = async (fastify) => {
       const {
         sourcePath,
         batchName,
+        overwriteExisting,
         qp,
         encoder,
         streamSelection,
@@ -269,6 +305,8 @@ const transcodeRoute: FastifyPluginAsync = async (fastify) => {
       const appSettings = readSettings();
       const defaults = appSettings.defaultTranscode;
       const streamPrefs = appSettings.defaultStreamMatching;
+      const activeOutputs = buildActiveOutputSet(getJobs());
+      const canOverwrite = overwriteExisting === true;
 
       if (
         !sourcePath ||
@@ -312,6 +350,22 @@ const transcodeRoute: FastifyPluginAsync = async (fastify) => {
           const probed = probeMediaStreams(abs);
           chosenStreamMap = pickPrimaryStreamMap(probed, streamPrefs);
         }
+      }
+
+      const conflict = checkOutputConflict(
+        sourcePath.trim(),
+        activeOutputs,
+        canOverwrite,
+      );
+      if (conflict) {
+        return reply.code(409).send({
+          error:
+            conflict.reason === "exists"
+              ? `Output already exists: ${conflict.outputPath}`
+              : `Another queued/running job is already targeting: ${conflict.outputPath}`,
+          outputPath: conflict.outputPath,
+          reason: conflict.reason,
+        });
       }
 
       const batchOptions: BatchOptions = {
@@ -359,6 +413,7 @@ const transcodeRoute: FastifyPluginAsync = async (fastify) => {
       const {
         folderPath,
         batchName,
+        overwriteExisting,
         qp,
         encoder,
         streamSelection,
@@ -369,6 +424,8 @@ const transcodeRoute: FastifyPluginAsync = async (fastify) => {
       const appSettings = readSettings();
       const defaults = appSettings.defaultTranscode;
       const streamPrefs = appSettings.defaultStreamMatching;
+      const activeOutputs = buildActiveOutputSet(getJobs());
+      const canOverwrite = overwriteExisting === true;
 
       if (
         !folderPath ||
@@ -407,6 +464,39 @@ const transcodeRoute: FastifyPluginAsync = async (fastify) => {
         return reply
           .code(400)
           .send({ error: "No supported media files found in folder" });
+      }
+
+      const conflicts = files
+        .map((sourcePath) => {
+          const conflict = checkOutputConflict(
+            sourcePath,
+            activeOutputs,
+            canOverwrite,
+          );
+          if (!conflict) return null;
+          return {
+            sourcePath,
+            outputPath: conflict.outputPath,
+            reason: conflict.reason,
+          };
+        })
+        .filter(
+          (
+            item,
+          ): item is {
+            sourcePath: string;
+            outputPath: string;
+            reason: "exists" | "active";
+          } => item !== null,
+        );
+
+      if (conflicts.length) {
+        return reply.code(409).send({
+          error:
+            "Batch contains files whose output already exists or is already queued/running",
+          conflictCount: conflicts.length,
+          conflicts: conflicts.slice(0, 50),
+        });
       }
 
       const chosenEncoder = pickEncoder(encoder ?? defaults.encoder);

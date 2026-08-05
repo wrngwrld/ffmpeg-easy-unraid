@@ -57,6 +57,7 @@ const jobs = new Map<string, Job>();
 let runningCount = 0;
 let parallelJobs = readSettings().parallelJobs;
 const cancelHandles = new Map<string, () => void>();
+const runtimeHandles = new Map<string, ReturnType<typeof spawnTranscode>>();
 const pausedBatchIds = new Set<string>();
 
 export function getParallelJobs(): number {
@@ -86,8 +87,18 @@ export function getJob(id: string): Job | undefined {
 export function setBatchPausedInQueue(batchId: string, paused: boolean): void {
   if (paused) {
     pausedBatchIds.add(batchId);
+    for (const job of jobs.values()) {
+      if (job.batchId !== batchId) continue;
+      if (job.state !== "running") continue;
+      runtimeHandles.get(job.id)?.pause();
+    }
   } else {
     pausedBatchIds.delete(batchId);
+    for (const job of jobs.values()) {
+      if (job.batchId !== batchId) continue;
+      if (job.state !== "running") continue;
+      runtimeHandles.get(job.id)?.resume();
+    }
   }
   void drain();
 }
@@ -237,6 +248,7 @@ async function runJob(job: Job): Promise<void> {
         queueEvents.emit("event", { type: "job-progress", job: snapshot(job) });
       },
     });
+    runtimeHandles.set(job.id, handle);
 
     cancelHandles.set(job.id, () => {
       cancelled = true;
@@ -329,5 +341,6 @@ async function runJob(job: Job): Promise<void> {
     queueEvents.emit("event", { type: "job-failed", job: snapshot(job) });
   } finally {
     cancelHandles.delete(job.id);
+    runtimeHandles.delete(job.id);
   }
 }

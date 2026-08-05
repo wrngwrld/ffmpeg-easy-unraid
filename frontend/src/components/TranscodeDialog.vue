@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from "vue";
-import { useQueueStore } from "../stores/queue.ts";
+import { QueueRequestError, useQueueStore } from "../stores/queue.ts";
 import { useStatusStore } from "../stores/status.ts";
 import type {
   AudioMode,
@@ -33,6 +33,11 @@ const subtitleMode = ref<SubtitleMode>(status.defaultTranscode.subtitleMode);
 const submitting = ref(false);
 const errorMsg = ref<string | null>(null);
 const successMsg = ref<string | null>(null);
+const overwritePromptOpen = ref(false);
+const overwritePromptText = ref("");
+const overwritePromptCount = ref(0);
+const overwritePromptExamples = ref<string[]>([]);
+let overwritePromptResolver: ((answer: boolean) => void) | null = null;
 
 const canVaapi = computed(() => status.availableEncoders.includes("vaapi"));
 const canVideoToolbox = computed(() =>
@@ -165,32 +170,124 @@ async function submit(): Promise<void> {
       throw new Error("Please select a video stream for primary mode.");
     }
 
-    if (isDirectory.value) {
-      const queued = await queue.submitFolder(
+    const extractConflictCounts = (
+      err: QueueRequestError,
+    ): { existing: number; active: number } => {
+      if (err.body.reason) {
+        return {
+          existing: err.body.reason === "exists" ? 1 : 0,
+          active: err.body.reason === "active" ? 1 : 0,
+        };
+      }
+
+      const conflicts = err.body.conflicts ?? [];
+      let existing = 0;
+      let active = 0;
+      for (const item of conflicts) {
+        if (item.reason === "exists") existing += 1;
+        if (item.reason === "active") active += 1;
+      }
+      return { existing, active };
+    };
+
+    const extractExistingOutputs = (err: QueueRequestError): string[] => {
+      if (err.body.outputPath && err.body.reason === "exists") {
+        return [err.body.outputPath];
+      }
+
+      const fromList = (err.body.conflicts ?? [])
+        .filter((item) => item.reason === "exists")
+        .map((item) => item.outputPath);
+
+      const unique = [...new Set(fromList)];
+      return unique.slice(0, 5);
+    };
+
+    const askOverwriteConfirmation = async (
+      message: string,
+      existingCount: number,
+      examples: string[],
+    ): Promise<boolean> => {
+      overwritePromptText.value = message;
+      overwritePromptCount.value = existingCount;
+      overwritePromptExamples.value = examples;
+      overwritePromptOpen.value = true;
+
+      return new Promise<boolean>((resolve) => {
+        overwritePromptResolver = resolve;
+      });
+    };
+
+    const runSubmit = async (overwriteExisting: boolean): Promise<number> => {
+      if (isDirectory.value) {
+        return queue.submitFolder(
+          props.path,
+          qp.value,
+          encoder.value,
+          streamSelection.value,
+          audioMode.value,
+          subtitleMode.value,
+          batchName.value.trim() || undefined,
+          overwriteExisting,
+        );
+      }
+
+      await queue.submit(
         props.path,
         qp.value,
         encoder.value,
         streamSelection.value,
+        streamMap,
         audioMode.value,
         subtitleMode.value,
         batchName.value.trim() || undefined,
+        overwriteExisting,
       );
+      return 1;
+    };
+
+    let queued: number;
+    try {
+      queued = await runSubmit(false);
+    } catch (err) {
+      if (!(err instanceof QueueRequestError) || err.status !== 409) {
+        throw err;
+      }
+
+      const { existing, active } = extractConflictCounts(err);
+      if (active > 0) {
+        throw new Error(
+          "Cannot queue because one or more outputs are already targeted by running/queued jobs.",
+        );
+      }
+
+      if (existing <= 0) {
+        throw err;
+      }
+
+      const prompt = isDirectory.value
+        ? `${existing} output file${existing === 1 ? "" : "s"} already exist. Overwrite and queue this batch?`
+        : "Output file already exists. Overwrite and start transcode?";
+
+      const ok = await askOverwriteConfirmation(
+        prompt,
+        existing,
+        extractExistingOutputs(err),
+      );
+      if (!ok) {
+        return;
+      }
+
+      queued = await runSubmit(true);
+    }
+
+    if (isDirectory.value) {
       successMsg.value = `Queued ${queued} file${queued === 1 ? "" : "s"}.`;
       emit("submitted");
       emit("close");
       return;
     }
 
-    await queue.submit(
-      props.path,
-      qp.value,
-      encoder.value,
-      streamSelection.value,
-      streamMap,
-      audioMode.value,
-      subtitleMode.value,
-      batchName.value.trim() || undefined,
-    );
     successMsg.value = "Queued 1 file.";
     emit("submitted");
     emit("close");
@@ -199,6 +296,24 @@ async function submit(): Promise<void> {
   } finally {
     submitting.value = false;
   }
+}
+
+function confirmOverwritePrompt(): void {
+  overwritePromptOpen.value = false;
+  overwritePromptText.value = "";
+  overwritePromptCount.value = 0;
+  overwritePromptExamples.value = [];
+  overwritePromptResolver?.(true);
+  overwritePromptResolver = null;
+}
+
+function cancelOverwritePrompt(): void {
+  overwritePromptOpen.value = false;
+  overwritePromptText.value = "";
+  overwritePromptCount.value = 0;
+  overwritePromptExamples.value = [];
+  overwritePromptResolver?.(false);
+  overwritePromptResolver = null;
 }
 </script>
 
@@ -534,6 +649,69 @@ async function submit(): Promise<void> {
           }}
         </button>
       </footer>
+
+      <div
+        v-if="overwritePromptOpen"
+        class="absolute inset-0 z-10 flex items-center justify-center rounded-[28px] bg-black/70 p-5 backdrop-blur-[4px]"
+      >
+        <div
+          class="w-full max-w-[460px] rounded-[20px] border border-white/12 bg-[rgba(11,15,22,0.96)] p-5 shadow-[var(--shadow-deep)]"
+        >
+          <p
+            class="m-0 text-[1rem] font-extrabold tracking-[-0.02em] text-[var(--text)]"
+          >
+            Overwrite Existing Output
+          </p>
+          <p class="mt-2 mb-0 text-[0.9rem] text-[var(--text-muted)]">
+            {{ overwritePromptText }}
+          </p>
+
+          <div
+            v-if="overwritePromptExamples.length"
+            class="mt-3 rounded-[14px] border border-white/10 bg-white/[0.04] p-3"
+          >
+            <p
+              class="m-0 text-[0.76rem] uppercase tracking-[0.12em] text-[var(--text-dim)]"
+            >
+              Sample output targets
+            </p>
+            <ul
+              class="mt-2 mb-0 list-disc pl-5 text-[0.82rem] text-[var(--text-muted)]"
+            >
+              <li v-for="item in overwritePromptExamples" :key="item">
+                {{ item }}
+              </li>
+            </ul>
+            <p
+              v-if="overwritePromptCount > overwritePromptExamples.length"
+              class="mt-2 mb-0 text-[0.78rem] text-[var(--text-dim)]"
+            >
+              and
+              {{
+                overwritePromptCount - overwritePromptExamples.length
+              }}
+              more...
+            </p>
+          </div>
+
+          <div class="mt-4 flex justify-end gap-2.5">
+            <button
+              type="button"
+              class="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[0.84rem] font-bold text-[var(--text)]"
+              @click="cancelOverwritePrompt"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              class="rounded-full border border-[rgba(242,125,145,0.25)] bg-[rgba(242,125,145,0.14)] px-4 py-2 text-[0.84rem] font-extrabold text-[var(--danger)]"
+              @click="confirmOverwritePrompt"
+            >
+              Overwrite & Continue
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
