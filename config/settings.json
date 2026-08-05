@@ -6,5 +6,11 @@
     "streamSelection": "primary",
     "audioMode": "aac",
     "subtitleMode": "drop"
+  },
+  "defaultStreamMatching": {
+    "audioLanguage": "eng",
+    "subtitleLanguage": "eng",
+    "preferDefaultAudio": true,
+    "preferDefaultSubtitle": true
   }
 }

@@ -4,6 +4,8 @@ import { APPROVALS_FILE, CONFIG_DIR } from "../config.js";
 
 export interface ApprovalItem {
   id: string;
+  batchId: string | null;
+  batchName: string | null;
   sourcePath: string;
   outputPath: string;
   createdAt: string;
@@ -21,6 +23,41 @@ interface ApprovalsPayload {
   pending: ApprovalItem[];
 }
 
+function normalizeApprovalItem(
+  item: Partial<ApprovalItem>,
+): ApprovalItem | null {
+  if (!item || typeof item !== "object") return null;
+  if (typeof item.id !== "string") return null;
+  if (typeof item.sourcePath !== "string") return null;
+  if (typeof item.outputPath !== "string") return null;
+  if (typeof item.createdAt !== "string") return null;
+  if (typeof item.completedAt !== "string") return null;
+  if (typeof item.qp !== "number") return null;
+  if (
+    item.encoder !== "vaapi" &&
+    item.encoder !== "videotoolbox" &&
+    item.encoder !== "software"
+  ) {
+    return null;
+  }
+
+  return {
+    id: item.id,
+    batchId: typeof item.batchId === "string" ? item.batchId : null,
+    batchName: typeof item.batchName === "string" ? item.batchName : null,
+    sourcePath: item.sourcePath,
+    outputPath: item.outputPath,
+    createdAt: item.createdAt,
+    completedAt: item.completedAt,
+    qp: item.qp,
+    encoder: item.encoder,
+    inputBytes: typeof item.inputBytes === "number" ? item.inputBytes : null,
+    outputBytes: typeof item.outputBytes === "number" ? item.outputBytes : null,
+    savedPercent:
+      typeof item.savedPercent === "number" ? item.savedPercent : null,
+  };
+}
+
 function readRaw(): ApprovalsPayload {
   try {
     const raw = fs.readFileSync(APPROVALS_FILE, "utf8");
@@ -28,7 +65,11 @@ function readRaw(): ApprovalsPayload {
     return {
       version: 1,
       updatedAt: parsed.updatedAt ?? "",
-      pending: Array.isArray(parsed.pending) ? parsed.pending : [],
+      pending: Array.isArray(parsed.pending)
+        ? parsed.pending
+            .map((item) => normalizeApprovalItem(item))
+            .filter((item): item is ApprovalItem => item !== null)
+        : [],
     };
   } catch {
     return {

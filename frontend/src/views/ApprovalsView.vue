@@ -21,8 +21,33 @@ const errorMsg = ref<string | null>(null);
 const infoMsg = ref<string | null>(null);
 const rowBusy = ref<Record<string, boolean>>({});
 const comparing = ref<{ sourcePath: string; outputPath: string } | null>(null);
+const selectedBatchFilter = ref<string>("all");
 
 const pendingCount = computed(() => approvals.value.length);
+const batchFilterOptions = computed(() => {
+  const seen = new Map<string, string>();
+  for (const item of approvals.value) {
+    if (!item.batchId) continue;
+    seen.set(item.batchId, item.batchName ?? item.batchId);
+  }
+  return [...seen.entries()].map(([id, label]) => ({ id, label }));
+});
+
+const filteredApprovals = computed(() => {
+  if (selectedBatchFilter.value === "all") return approvals.value;
+  if (selectedBatchFilter.value === "unbatched") {
+    return approvals.value.filter((item) => !item.batchId);
+  }
+  return approvals.value.filter(
+    (item) => item.batchId === selectedBatchFilter.value,
+  );
+});
+
+function batchLabel(item: ApprovalItem): string {
+  if (item.batchName) return item.batchName;
+  if (item.batchId) return item.batchId;
+  return "Unbatched";
+}
 
 function formatDate(s: string): string {
   return new Date(s).toLocaleString();
@@ -60,6 +85,13 @@ async function loadApprovals(): Promise<void> {
 }
 
 async function replaceOne(item: ApprovalItem): Promise<void> {
+  if (typeof window !== "undefined") {
+    const ok = window.confirm(
+      `Replace source file for \"${item.sourcePath}\" with its transcoded output? This cannot be undone.`,
+    );
+    if (!ok) return;
+  }
+
   rowBusy.value[item.id] = true;
   errorMsg.value = null;
   infoMsg.value = null;
@@ -81,6 +113,13 @@ async function replaceOne(item: ApprovalItem): Promise<void> {
 }
 
 async function dismissOne(item: ApprovalItem): Promise<void> {
+  if (typeof window !== "undefined") {
+    const ok = window.confirm(
+      `Dismiss approval for \"${item.sourcePath}\"? The transcoded file will remain in export until manually handled.`,
+    );
+    if (!ok) return;
+  }
+
   rowBusy.value[item.id] = true;
   errorMsg.value = null;
   infoMsg.value = null;
@@ -100,6 +139,13 @@ async function dismissOne(item: ApprovalItem): Promise<void> {
 }
 
 async function replaceAll(): Promise<void> {
+  if (typeof window !== "undefined") {
+    const ok = window.confirm(
+      `Replace source files for all ${approvals.value.length} pending approval item${approvals.value.length === 1 ? "" : "s"}? This cannot be undone.`,
+    );
+    if (!ok) return;
+  }
+
   replacingAll.value = true;
   errorMsg.value = null;
   infoMsg.value = null;
@@ -153,7 +199,7 @@ onMounted(loadApprovals);
         <span
           class="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[0.8rem] text-[var(--text-muted)]"
         >
-          {{ pendingCount }} pending
+          {{ filteredApprovals.length }} shown / {{ pendingCount }} pending
         </span>
         <button
           class="rounded-full border border-[rgba(109,212,236,0.35)] bg-[rgba(109,212,236,0.13)] px-3.5 py-2 text-[0.84rem] font-bold text-[var(--text)] transition-colors hover:bg-[rgba(109,212,236,0.2)] disabled:opacity-50"
@@ -173,6 +219,25 @@ onMounted(loadApprovals);
       {{ errorMsg }}
     </p>
 
+    <div class="mb-4 flex items-center gap-2.5">
+      <label
+        class="text-[0.8rem] text-[var(--text-muted)]"
+        for="approvals-batch-filter"
+        >Batch</label
+      >
+      <select
+        id="approvals-batch-filter"
+        v-model="selectedBatchFilter"
+        class="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[0.8rem] text-[var(--text)]"
+      >
+        <option value="all">All batches</option>
+        <option value="unbatched">Unbatched</option>
+        <option v-for="opt in batchFilterOptions" :key="opt.id" :value="opt.id">
+          {{ opt.label }}
+        </option>
+      </select>
+    </div>
+
     <div
       v-if="loading"
       class="rounded-[22px] border border-dashed border-[rgba(109,212,236,0.16)] bg-white/[0.025] px-4 py-10 text-center text-[var(--text-muted)]"
@@ -181,15 +246,15 @@ onMounted(loadApprovals);
     </div>
 
     <div
-      v-else-if="!approvals.length"
+      v-else-if="!filteredApprovals.length"
       class="rounded-[22px] border border-dashed border-[rgba(109,212,236,0.16)] bg-white/[0.025] px-4 py-10 text-center text-[var(--text-muted)]"
     >
-      No pending approvals right now.
+      No pending approvals for this batch filter.
     </div>
 
     <div v-else class="grid gap-3.5">
       <article
-        v-for="item in approvals"
+        v-for="item in filteredApprovals"
         :key="item.id"
         class="rounded-[22px] border border-white/10 bg-white/[0.035] px-4 py-3.5"
       >
@@ -215,6 +280,11 @@ onMounted(loadApprovals);
               class="mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap text-[0.8rem] text-[var(--text-dim)]"
             >
               Transcoded: {{ item.outputPath }}
+            </p>
+            <p
+              class="mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap text-[0.78rem] text-[var(--text-dim)]"
+            >
+              Batch: {{ batchLabel(item) }}
             </p>
           </div>
           <div class="shrink-0 text-right">

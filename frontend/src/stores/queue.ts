@@ -3,6 +3,7 @@ import { computed } from "vue";
 import { useStatusStore } from "./status.ts";
 import type {
   AudioMode,
+  Batch,
   EncoderChoice,
   StreamMapSelection,
   StreamSelection,
@@ -58,6 +59,7 @@ export const useQueueStore = defineStore("queue", () => {
     streamMap: StreamMapSelection | undefined,
     audioMode: AudioMode,
     subtitleMode: SubtitleMode,
+    batchName?: string,
   ): Promise<void> {
     const res = await fetch("/api/transcode", {
       method: "POST",
@@ -70,6 +72,7 @@ export const useQueueStore = defineStore("queue", () => {
         streamMap,
         audioMode,
         subtitleMode,
+        batchName,
       }),
     });
     if (!res.ok) {
@@ -85,6 +88,7 @@ export const useQueueStore = defineStore("queue", () => {
     streamSelection: StreamSelection,
     audioMode: AudioMode,
     subtitleMode: SubtitleMode,
+    batchName?: string,
   ): Promise<number> {
     const res = await fetch("/api/transcode/folder", {
       method: "POST",
@@ -96,6 +100,7 @@ export const useQueueStore = defineStore("queue", () => {
         streamSelection,
         audioMode,
         subtitleMode,
+        batchName,
       }),
     });
     if (!res.ok) {
@@ -110,6 +115,58 @@ export const useQueueStore = defineStore("queue", () => {
     await fetch(`/api/jobs/${id}`, { method: "DELETE" });
   }
 
+  async function pauseBatch(batchId: string): Promise<void> {
+    const res = await fetch(
+      `/api/batches/${encodeURIComponent(batchId)}/pause`,
+      {
+        method: "POST",
+      },
+    );
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(err.error ?? `HTTP ${res.status}`);
+    }
+
+    const data = (await res.json()) as { batch?: Batch };
+    if (data.batch) {
+      status.upsertBatch(data.batch);
+    }
+    await status.refreshQueueSnapshot();
+  }
+
+  async function resumeBatch(batchId: string): Promise<void> {
+    const res = await fetch(
+      `/api/batches/${encodeURIComponent(batchId)}/resume`,
+      {
+        method: "POST",
+      },
+    );
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(err.error ?? `HTTP ${res.status}`);
+    }
+
+    const data = (await res.json()) as { batch?: Batch };
+    if (data.batch) {
+      status.upsertBatch(data.batch);
+    }
+    await status.refreshQueueSnapshot();
+  }
+
+  async function cancelRemainingInBatch(batchId: string): Promise<number> {
+    const res = await fetch(
+      `/api/batches/${encodeURIComponent(batchId)}/cancel-remaining`,
+      { method: "POST" },
+    );
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(err.error ?? `HTTP ${res.status}`);
+    }
+    const payload = (await res.json()) as { cancelled?: number };
+    await status.refreshQueueSnapshot();
+    return payload.cancelled ?? 0;
+  }
+
   return {
     activeJobs,
     queuedJobs,
@@ -117,5 +174,8 @@ export const useQueueStore = defineStore("queue", () => {
     submit,
     submitFolder,
     cancel,
+    pauseBatch,
+    resumeBatch,
+    cancelRemainingInBatch,
   };
 });

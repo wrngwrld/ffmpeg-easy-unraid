@@ -3,9 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   addJob,
+  cancelRemainingByBatch,
   cancelJob,
   getJobs,
   getParallelJobs,
+  queueEvents,
+  setBatchPausedInQueue,
 } from "../services/jobQueue.js";
 import {
   getAvailableEncoders,
@@ -21,9 +24,18 @@ import type {
 } from "../services/jobQueue.js";
 import { MEDIA_DIR, MEDIA_EXTENSIONS } from "../config.js";
 import { readSettings } from "../services/settings.js";
+import {
+  appendBatchJobs,
+  createBatch,
+  getBatch,
+  listBatches,
+  setBatchPaused,
+  type BatchOptions,
+} from "../services/batches.js";
 
 interface TranscodeBody {
   sourcePath: string;
+  batchName?: string;
   qp?: number;
   encoder?: string;
   streamSelection?: string;
@@ -38,6 +50,7 @@ interface TranscodeBody {
 
 interface TranscodeFolderBody {
   folderPath: string;
+  batchName?: string;
   qp?: number;
   encoder?: string;
   streamSelection?: string;
@@ -48,6 +61,18 @@ interface TranscodeFolderBody {
   };
   audioMode?: string;
   subtitleMode?: string;
+}
+
+function defaultBatchName(inputPath: string): string {
+  const clean = inputPath.trim().replace(/[\\/]+$/, "");
+  const base = path.basename(clean);
+  return base || "Batch";
+}
+
+function pickBatchName(inputPath: string, rawBatchName: unknown): string {
+  if (typeof rawBatchName !== "string") return defaultBatchName(inputPath);
+  const trimmed = rawBatchName.trim();
+  return trimmed.length ? trimmed : defaultBatchName(inputPath);
 }
 
 function normalizeStreamMap(
@@ -170,17 +195,70 @@ function collectMediaFiles(absFolder: string): string[] {
 }
 
 const transcodeRoute: FastifyPluginAsync = async (fastify) => {
+  for (const batch of listBatches()) {
+    if (batch.paused) {
+      setBatchPausedInQueue(batch.id, true);
+    }
+  }
+
   fastify.get("/api/jobs", async () => ({
     jobs: getJobs(),
+    batches: listBatches(),
     availableEncoders: getAvailableEncoders(),
     parallelJobs: getParallelJobs(),
   }));
+
+  fastify.get("/api/batches", async () => ({
+    batches: listBatches(),
+  }));
+
+  fastify.post<{ Params: { id: string } }>(
+    "/api/batches/:id/pause",
+    async (req, reply) => {
+      const batch = setBatchPaused(req.params.id, true);
+      if (!batch) {
+        return reply.code(404).send({ error: "Batch not found" });
+      }
+
+      setBatchPausedInQueue(batch.id, true);
+      queueEvents.emit("event", { type: "batch-updated", batch });
+      return { batch };
+    },
+  );
+
+  fastify.post<{ Params: { id: string } }>(
+    "/api/batches/:id/resume",
+    async (req, reply) => {
+      const batch = setBatchPaused(req.params.id, false);
+      if (!batch) {
+        return reply.code(404).send({ error: "Batch not found" });
+      }
+
+      setBatchPausedInQueue(batch.id, false);
+      queueEvents.emit("event", { type: "batch-updated", batch });
+      return { batch };
+    },
+  );
+
+  fastify.post<{ Params: { id: string } }>(
+    "/api/batches/:id/cancel-remaining",
+    async (req, reply) => {
+      const batch = getBatch(req.params.id);
+      if (!batch) {
+        return reply.code(404).send({ error: "Batch not found" });
+      }
+
+      const cancelled = cancelRemainingByBatch(batch.id);
+      return { cancelled, batchId: batch.id };
+    },
+  );
 
   fastify.post<{ Body: TranscodeBody }>(
     "/api/transcode",
     async (req, reply) => {
       const {
         sourcePath,
+        batchName,
         qp,
         encoder,
         streamSelection,
@@ -236,7 +314,26 @@ const transcodeRoute: FastifyPluginAsync = async (fastify) => {
         }
       }
 
+      const batchOptions: BatchOptions = {
+        qp: effectiveQp,
+        encoder: chosenEncoder,
+        streamSelection: chosenStreamSelection,
+        streamMap: chosenStreamMap,
+        audioMode: chosenAudioMode,
+        subtitleMode: chosenSubtitleMode,
+        streamMatching: streamPrefs,
+      };
+
+      const batch = createBatch({
+        name: pickBatchName(sourcePath, batchName),
+        sourcePath: sourcePath.trim(),
+        kind: "single",
+        options: batchOptions,
+      });
+      queueEvents.emit("event", { type: "batch-added", batch });
+
       const job = addJob(
+        batch.id,
         sourcePath.trim(),
         effectiveQp,
         chosenEncoder,
@@ -245,7 +342,14 @@ const transcodeRoute: FastifyPluginAsync = async (fastify) => {
         chosenAudioMode,
         chosenSubtitleMode,
       );
-      return reply.code(201).send({ jobId: job.id, job });
+      const updatedBatch = appendBatchJobs(batch.id, [job.id]);
+      if (updatedBatch) {
+        queueEvents.emit("event", {
+          type: "batch-updated",
+          batch: updatedBatch,
+        });
+      }
+      return reply.code(201).send({ jobId: job.id, batchId: batch.id, job });
     },
   );
 
@@ -254,6 +358,7 @@ const transcodeRoute: FastifyPluginAsync = async (fastify) => {
     async (req, reply) => {
       const {
         folderPath,
+        batchName,
         qp,
         encoder,
         streamSelection,
@@ -318,6 +423,24 @@ const transcodeRoute: FastifyPluginAsync = async (fastify) => {
       const chosenSubtitleMode = pickSubtitleMode(
         subtitleMode ?? defaults.subtitleMode,
       );
+
+      const batchOptions: BatchOptions = {
+        qp: effectiveQp,
+        encoder: chosenEncoder,
+        streamSelection: chosenStreamSelection,
+        audioMode: chosenAudioMode,
+        subtitleMode: chosenSubtitleMode,
+        streamMatching: streamPrefs,
+      };
+
+      const batch = createBatch({
+        name: pickBatchName(folderPath, batchName),
+        sourcePath: folderPath.trim(),
+        kind: "folder",
+        options: batchOptions,
+      });
+      queueEvents.emit("event", { type: "batch-added", batch });
+
       const jobs = files.map((sourcePath) => {
         const autoStreamMap =
           chosenStreamSelection === "primary"
@@ -328,6 +451,7 @@ const transcodeRoute: FastifyPluginAsync = async (fastify) => {
             : undefined;
 
         return addJob(
+          batch.id,
           sourcePath,
           effectiveQp,
           chosenEncoder,
@@ -338,9 +462,22 @@ const transcodeRoute: FastifyPluginAsync = async (fastify) => {
         );
       });
 
-      return reply
-        .code(201)
-        .send({ queued: jobs.length, firstJobId: jobs[0]?.id ?? null });
+      const updatedBatch = appendBatchJobs(
+        batch.id,
+        jobs.map((job) => job.id),
+      );
+      if (updatedBatch) {
+        queueEvents.emit("event", {
+          type: "batch-updated",
+          batch: updatedBatch,
+        });
+      }
+
+      return reply.code(201).send({
+        queued: jobs.length,
+        batchId: batch.id,
+        firstJobId: jobs[0]?.id ?? null,
+      });
     },
   );
 

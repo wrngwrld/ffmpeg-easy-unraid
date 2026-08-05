@@ -17,6 +17,7 @@ export const STATIC_ROOT =
 export const STATS_FILE = path.join(CONFIG_DIR, "stats.json");
 export const SETTINGS_FILE = path.join(CONFIG_DIR, "settings.json");
 export const APPROVALS_FILE = path.join(CONFIG_DIR, "approvals.json");
+export const BATCHES_FILE = path.join(CONFIG_DIR, "batches.json");
 
 export const MEDIA_EXTENSIONS = new Set([
   ".mkv",

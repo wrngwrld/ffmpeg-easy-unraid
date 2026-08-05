@@ -42,6 +42,7 @@ const isDirectory = computed(() => props.entry.type === "directory");
 const isPrimarySelection = computed(
   () => streamSelection.value === "primary" && !isDirectory.value,
 );
+const batchName = ref("");
 
 const videoStreams = computed(() =>
   availableStreams.value.filter((s) => s.codecType === "video"),
@@ -141,6 +142,7 @@ watch(
   () => props.path,
   () => {
     void loadStreams();
+    batchName.value = props.entry.name;
   },
   { immediate: true },
 );
@@ -171,6 +173,7 @@ async function submit(): Promise<void> {
         streamSelection.value,
         audioMode.value,
         subtitleMode.value,
+        batchName.value.trim() || undefined,
       );
       successMsg.value = `Queued ${queued} file${queued === 1 ? "" : "s"}.`;
       emit("submitted");
@@ -186,6 +189,7 @@ async function submit(): Promise<void> {
       streamMap,
       audioMode.value,
       subtitleMode.value,
+      batchName.value.trim() || undefined,
     );
     successMsg.value = "Queued 1 file.";
     emit("submitted");
@@ -236,6 +240,20 @@ async function submit(): Promise<void> {
           class="shrink-0 font-mono text-[0.82rem] text-[var(--text-dim)]"
           >{{ formatSize(entry.sizeBytes) }}</span
         >
+      </div>
+
+      <div class="mb-[22px]">
+        <label
+          class="mb-2.5 block text-[0.88rem] font-semibold text-[var(--text-muted)]"
+        >
+          Batch Name
+        </label>
+        <input
+          v-model="batchName"
+          type="text"
+          class="w-full rounded-[14px] border border-white/10 bg-white/[0.04] px-4 py-3 text-[0.9rem] text-[var(--text)] outline-none focus:border-[rgba(109,212,236,0.35)]"
+          :placeholder="isDirectory ? 'Folder batch' : 'Single-file batch'"
+        />
       </div>
 
       <div class="mb-[22px]">

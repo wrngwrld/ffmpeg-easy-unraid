@@ -11,6 +11,7 @@ import {
 } from "./ffmpeg.js";
 import { recordEntry } from "./stats.js";
 import { upsertApproval } from "./approvals.js";
+import { getBatch } from "./batches.js";
 
 export type JobState = "queued" | "running" | "done" | "failed" | "cancelled";
 export type EncoderChoice = "vaapi" | "videotoolbox" | "software";
@@ -25,6 +26,7 @@ export type SubtitleMode = "copy" | "drop";
 
 export interface Job {
   id: string;
+  batchId: string;
   sourcePath: string;
   outputPath: string;
   qp: number;
@@ -55,6 +57,7 @@ const jobs = new Map<string, Job>();
 let runningCount = 0;
 let parallelJobs = readSettings().parallelJobs;
 const cancelHandles = new Map<string, () => void>();
+const pausedBatchIds = new Set<string>();
 
 export function getParallelJobs(): number {
   return parallelJobs;
@@ -80,12 +83,37 @@ export function getJob(id: string): Job | undefined {
   return jobs.get(id);
 }
 
+export function setBatchPausedInQueue(batchId: string, paused: boolean): void {
+  if (paused) {
+    pausedBatchIds.add(batchId);
+  } else {
+    pausedBatchIds.delete(batchId);
+  }
+  void drain();
+}
+
+export function cancelRemainingByBatch(batchId: string): number {
+  let cancelled = 0;
+  for (const job of jobs.values()) {
+    if (job.batchId !== batchId) continue;
+    if (job.state !== "queued") continue;
+    job.state = "cancelled";
+    queueEvents.emit("event", { type: "job-cancelled", job: snapshot(job) });
+    cancelled += 1;
+  }
+  if (cancelled > 0) {
+    void drain();
+  }
+  return cancelled;
+}
+
 function outputPathFor(sourcePath: string): string {
   const { dir, name } = path.parse(sourcePath);
   return path.join(dir, name + ".mkv");
 }
 
 export function addJob(
+  batchId: string,
   sourcePath: string,
   qp: number,
   encoder: EncoderChoice,
@@ -103,6 +131,7 @@ export function addJob(
 
   const job: Job = {
     id: randomUUID(),
+    batchId,
     sourcePath,
     outputPath: outputPathFor(sourcePath),
     qp,
@@ -155,7 +184,9 @@ function snapshot(job: Job): Job {
 
 async function drain(): Promise<void> {
   while (runningCount < parallelJobs) {
-    const next = [...jobs.values()].find((j) => j.state === "queued");
+    const next = [...jobs.values()].find(
+      (j) => j.state === "queued" && !pausedBatchIds.has(j.batchId),
+    );
     if (!next) break;
     runningCount++;
     runJob(next).finally(() => {
@@ -254,6 +285,8 @@ async function runJob(job: Job): Promise<void> {
     });
 
     upsertApproval({
+      batchId: job.batchId,
+      batchName: getBatch(job.batchId)?.name ?? null,
       sourcePath: job.sourcePath,
       outputPath: job.outputPath,
       createdAt: job.createdAt,

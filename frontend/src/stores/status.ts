@@ -3,6 +3,7 @@ import { ref, computed } from "vue";
 import type {
   AppSettings,
   AppSettingsLimits,
+  Batch,
   EncoderChoice,
   Job,
   StreamMatchingDefaults,
@@ -112,6 +113,18 @@ function saveLocalStreamMatchingDefaults(next: StreamMatchingDefaults): void {
   }
 }
 
+function isBatchPayload(value: unknown): value is Batch {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<Batch>;
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.name === "string" &&
+    typeof candidate.sourcePath === "string" &&
+    typeof candidate.createdAt === "string" &&
+    Array.isArray(candidate.jobIds)
+  );
+}
+
 export const useStatusStore = defineStore("status", () => {
   const localDefaults = loadLocalDefaults();
   const localStreamMatchingDefaults = loadLocalStreamMatchingDefaults();
@@ -139,6 +152,7 @@ export const useStatusStore = defineStore("status", () => {
   });
   const settingsLimits = ref<AppSettingsLimits>({ min: 1, max: 8 });
   const jobMap = ref(new Map<string, Job>());
+  const batchMap = ref(new Map<string, Batch>());
 
   const jobs = computed<Job[]>(() =>
     [...jobMap.value.values()].sort(
@@ -147,8 +161,66 @@ export const useStatusStore = defineStore("status", () => {
     ),
   );
 
+  const batches = computed<Batch[]>(() =>
+    [...batchMap.value.values()].sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    ),
+  );
+
   function applyJob(job: Job): void {
     jobMap.value.set(job.id, job);
+  }
+
+  function applyBatch(batch: Batch): void {
+    batchMap.value.set(batch.id, {
+      ...batch,
+      paused: batch.paused === true,
+    });
+  }
+
+  function upsertBatch(batch: Batch): void {
+    applyBatch(batch);
+  }
+
+  async function refreshQueueSnapshot(): Promise<void> {
+    const res = await fetch("/api/jobs");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const data = (await res.json()) as {
+      jobs?: Job[];
+      batches?: Batch[];
+      availableEncoders?: EncoderChoice[];
+      parallelJobs?: number;
+    };
+
+    if (Array.isArray(data.jobs)) {
+      const nextMap = new Map<string, Job>();
+      for (const job of data.jobs) nextMap.set(job.id, job);
+      jobMap.value = nextMap;
+    }
+
+    if (Array.isArray(data.batches)) {
+      const nextMap = new Map<string, Batch>();
+      for (const batch of data.batches) {
+        nextMap.set(batch.id, {
+          ...batch,
+          paused: batch.paused === true,
+        });
+      }
+      batchMap.value = nextMap;
+    }
+
+    if (Array.isArray(data.availableEncoders)) {
+      availableEncoders.value = data.availableEncoders;
+      hardwareAvailable.value = data.availableEncoders.some(
+        (enc) => enc !== "software",
+      );
+    }
+
+    if (typeof data.parallelJobs === "number") {
+      parallelJobs.value = data.parallelJobs;
+    }
   }
 
   function applySettings(settings: Partial<AppSettings> | undefined): void {
@@ -276,10 +348,12 @@ export const useStatusStore = defineStore("status", () => {
       .then(
         (data: {
           jobs?: Job[];
+          batches?: Batch[];
           availableEncoders?: EncoderChoice[];
           parallelJobs?: number;
         }) => {
           (data.jobs ?? []).forEach(applyJob);
+          (data.batches ?? []).forEach(applyBatch);
           if (Array.isArray(data.availableEncoders)) {
             availableEncoders.value = data.availableEncoders;
             hardwareAvailable.value = data.availableEncoders.some(
@@ -331,6 +405,26 @@ export const useStatusStore = defineStore("status", () => {
       });
     }
 
+    const batchEvents = ["batch-added", "batch-updated"];
+    for (const evt of batchEvents) {
+      source.addEventListener(evt, (e) => {
+        const payload = JSON.parse((e as MessageEvent).data) as unknown;
+        if (isBatchPayload(payload)) {
+          applyBatch(payload);
+          return;
+        }
+
+        if (
+          payload &&
+          typeof payload === "object" &&
+          "batch" in payload &&
+          isBatchPayload((payload as { batch?: unknown }).batch)
+        ) {
+          applyBatch((payload as { batch: Batch }).batch);
+        }
+      });
+    }
+
     source.addEventListener("open", () => {
       connected.value = true;
     });
@@ -344,6 +438,7 @@ export const useStatusStore = defineStore("status", () => {
     hardwareAvailable,
     connected,
     jobs,
+    batches,
     parallelJobs,
     defaultTranscode,
     defaultStreamMatching,
@@ -353,5 +448,7 @@ export const useStatusStore = defineStore("status", () => {
     updateParallelJobs,
     updateDefaultTranscode,
     updateDefaultStreamMatching,
+    upsertBatch,
+    refreshQueueSnapshot,
   };
 });

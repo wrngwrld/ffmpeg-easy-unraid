@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "updatedAt": "2026-08-05T13:16:56.924Z",
+  "items": [
+    {
+      "id": "60414b39-caa2-4e58-b269-f41d3abea7d9",
+      "name": "PLL",
+      "sourcePath": "/PLL",
+      "kind": "folder",
+      "paused": false,
+      "createdAt": "2026-08-05T13:16:50.339Z",
+      "jobIds": [
+        "4a9d6605-9020-46e2-a8c5-e8c00287161b",
+        "a193e00b-5f88-424f-944c-67af07539fd2"
+      ],
+      "options": {
+        "qp": 51,
+        "encoder": "videotoolbox",
+        "streamSelection": "primary",
+        "audioMode": "aac",
+        "subtitleMode": "drop",
+        "streamMatching": {
+          "audioLanguage": "eng",
+          "subtitleLanguage": "eng",
+          "preferDefaultAudio": true,
+          "preferDefaultSubtitle": true
+        }
+      }
+    },
+    {
+      "id": "08aebe04-f82c-4e83-8855-e7d1725015e5",
+      "name": "PLL",
+      "sourcePath": "/PLL",
+      "kind": "folder",
+      "paused": false,
+      "createdAt": "2026-08-05T13:12:36.933Z",
+      "jobIds": [
+        "1ae212b9-7c75-4d28-81d9-4fa82ad0d968",
+        "c0d0dc8d-2c1e-473e-a819-fe8f54af6f76"
+      ],
+      "options": {
+        "qp": 28,
+        "encoder": "videotoolbox",
+        "streamSelection": "primary",
+        "audioMode": "aac",
+        "subtitleMode": "drop",
+        "streamMatching": {
+          "audioLanguage": "eng",
+          "subtitleLanguage": "eng",
+          "preferDefaultAudio": true,
+          "preferDefaultSubtitle": true
+        }
+      }
+    },
+    {
+      "id": "bde8046d-bbf2-4abd-8aa9-807cf6a22959",
+      "name": "PLL",
+      "sourcePath": "/PLL",
+      "kind": "folder",
+      "createdAt": "2026-08-05T13:11:09.683Z",
+      "jobIds": [
+        "959efe8a-02c5-4bbd-a5bc-a092c1f7c58b",
+        "0a2cda4b-6578-42c1-8d4a-13f59fcfbd49"
+      ],
+      "options": {
+        "qp": 28,
+        "encoder": "videotoolbox",
+        "streamSelection": "primary",
+        "audioMode": "aac",
+        "subtitleMode": "drop",
+        "streamMatching": {
+          "audioLanguage": "eng",
+          "subtitleLanguage": "eng",
+          "preferDefaultAudio": true,
+          "preferDefaultSubtitle": true
+        }
+      }
+    }
+  ]
+}

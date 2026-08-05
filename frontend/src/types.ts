@@ -23,6 +23,7 @@ export interface MediaStreamInfo {
 
 export interface Job {
   id: string;
+  batchId: string;
   sourcePath: string;
   outputPath: string;
   qp: number;
@@ -72,6 +73,8 @@ export interface HistoryEntry {
 
 export interface ApprovalItem {
   id: string;
+  batchId: string | null;
+  batchName: string | null;
   sourcePath: string;
   outputPath: string;
   createdAt: string;
@@ -106,6 +109,29 @@ export interface StreamMatchingDefaults {
   subtitleLanguage: string;
   preferDefaultAudio: boolean;
   preferDefaultSubtitle: boolean;
+}
+
+export interface BatchOptions {
+  qp: number;
+  encoder: EncoderChoice;
+  streamSelection: StreamSelection;
+  streamMap?: StreamMapSelection;
+  audioMode: AudioMode;
+  subtitleMode: SubtitleMode;
+  streamMatching: StreamMatchingDefaults;
+}
+
+export type BatchKind = "single" | "folder";
+
+export interface Batch {
+  id: string;
+  name: string;
+  sourcePath: string;
+  kind: BatchKind;
+  paused: boolean;
+  createdAt: string;
+  jobIds: string[];
+  options: BatchOptions;
 }
 
 export interface AppSettings {
