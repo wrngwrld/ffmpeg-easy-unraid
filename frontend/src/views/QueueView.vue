@@ -61,7 +61,7 @@ function fmtDuration(totalSeconds: number): string {
           Transcode Queue
         </h2>
         <p class="mt-2 max-w-[44ch] text-[0.94rem] text-[var(--text-muted)]">
-          Active and recently completed jobs.
+          Currently running and waiting jobs.
         </p>
       </div>
       <div class="flex items-center gap-2">
@@ -135,27 +135,11 @@ function fmtDuration(totalSeconds: number): string {
       </div>
     </section>
 
-    <section v-if="queue.completedJobs.length">
-      <h3
-        class="mb-3 mt-5 text-[0.78rem] font-bold uppercase tracking-[0.14em] text-[var(--text-dim)]"
-      >
-        Completed
-      </h3>
-      <div class="grid gap-3.5">
-        <JobCard
-          v-for="job in queue.completedJobs"
-          :key="job.id"
-          :job="job"
-          @compare="comparing = $event"
-        />
-      </div>
-    </section>
-
     <div
-      v-if="!queue.activeJobs.length && !queue.completedJobs.length"
+      v-if="!queue.activeJobs.length"
       class="rounded-[22px] border border-dashed border-[rgba(109,212,236,0.16)] bg-white/[0.025] px-4 py-10 text-center text-[var(--text-muted)]"
     >
-      No jobs yet — browse your media library and pick a file to transcode.
+      No queued or running jobs right now.
     </div>
   </div>
 
