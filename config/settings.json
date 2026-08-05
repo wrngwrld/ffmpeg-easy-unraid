@@ -1,3 +1,10 @@
 {
-  "parallelJobs": 1
+  "parallelJobs": 1,
+  "defaultTranscode": {
+    "qp": 28,
+    "encoder": "videotoolbox",
+    "streamSelection": "primary",
+    "audioMode": "aac",
+    "subtitleMode": "drop"
+  }
 }

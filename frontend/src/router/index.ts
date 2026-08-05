@@ -6,6 +6,10 @@ const router = createRouter({
     { path: "/", redirect: "/browse" },
     { path: "/browse", component: () => import("../views/BrowseView.vue") },
     { path: "/queue", component: () => import("../views/QueueView.vue") },
+    {
+      path: "/approvals",
+      component: () => import("../views/ApprovalsView.vue"),
+    },
     { path: "/history", component: () => import("../views/HistoryView.vue") },
     { path: "/system", component: () => import("../views/SystemView.vue") },
   ],

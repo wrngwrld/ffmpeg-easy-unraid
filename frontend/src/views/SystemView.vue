@@ -4,6 +4,7 @@ import { useStatusStore } from "../stores/status.ts";
 import type {
   AudioMode,
   EncoderChoice,
+  StreamMatchingDefaults,
   StreamSelection,
   SubtitleMode,
 } from "../types.ts";
@@ -16,6 +17,9 @@ const queueSaveOk = ref<string | null>(null);
 const savingDefaults = ref(false);
 const defaultsSaveError = ref<string | null>(null);
 const defaultsSaveOk = ref<string | null>(null);
+const savingMatcherDefaults = ref(false);
+const matcherSaveError = ref<string | null>(null);
+const matcherSaveOk = ref<string | null>(null);
 const draftParallelJobs = ref(status.parallelJobs);
 const draftQp = ref(status.defaultTranscode.qp);
 const draftEncoder = ref<EncoderChoice>(status.defaultTranscode.encoder);
@@ -25,6 +29,16 @@ const draftStreamSelection = ref<StreamSelection>(
 const draftAudioMode = ref<AudioMode>(status.defaultTranscode.audioMode);
 const draftSubtitleMode = ref<SubtitleMode>(
   status.defaultTranscode.subtitleMode,
+);
+const draftAudioLanguage = ref(status.defaultStreamMatching.audioLanguage);
+const draftSubtitleLanguage = ref(
+  status.defaultStreamMatching.subtitleLanguage,
+);
+const draftPreferDefaultAudio = ref(
+  status.defaultStreamMatching.preferDefaultAudio,
+);
+const draftPreferDefaultSubtitle = ref(
+  status.defaultStreamMatching.preferDefaultSubtitle,
 );
 
 watch(
@@ -43,6 +57,17 @@ watch(
     draftStreamSelection.value = next.streamSelection;
     draftAudioMode.value = next.audioMode;
     draftSubtitleMode.value = next.subtitleMode;
+  },
+  { immediate: true, deep: true },
+);
+
+watch(
+  () => status.defaultStreamMatching,
+  (next: StreamMatchingDefaults) => {
+    draftAudioLanguage.value = next.audioLanguage;
+    draftSubtitleLanguage.value = next.subtitleLanguage;
+    draftPreferDefaultAudio.value = next.preferDefaultAudio;
+    draftPreferDefaultSubtitle.value = next.preferDefaultSubtitle;
   },
   { immediate: true, deep: true },
 );
@@ -92,6 +117,27 @@ async function saveTranscodeDefaults(): Promise<void> {
     defaultsSaveError.value = err instanceof Error ? err.message : String(err);
   } finally {
     savingDefaults.value = false;
+  }
+}
+
+async function saveStreamMatchingDefaults(): Promise<void> {
+  matcherSaveError.value = null;
+  matcherSaveOk.value = null;
+  savingMatcherDefaults.value = true;
+
+  try {
+    await status.updateDefaultStreamMatching({
+      audioLanguage: draftAudioLanguage.value.trim().toLowerCase() || "eng",
+      subtitleLanguage:
+        draftSubtitleLanguage.value.trim().toLowerCase() || "eng",
+      preferDefaultAudio: draftPreferDefaultAudio.value,
+      preferDefaultSubtitle: draftPreferDefaultSubtitle.value,
+    });
+    matcherSaveOk.value = "Saved stream matching defaults.";
+  } catch (err) {
+    matcherSaveError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    savingMatcherDefaults.value = false;
   }
 }
 </script>
@@ -447,6 +493,92 @@ async function saveTranscodeDefaults(): Promise<void> {
           class="m-0 text-[0.82rem] text-[var(--danger)]"
         >
           {{ defaultsSaveError }}
+        </p>
+      </div>
+    </article>
+
+    <article
+      class="relative rounded-[28px] border border-white/10 bg-[var(--glass)] p-7 shadow-[var(--shadow-deep),var(--shadow-glow)] backdrop-blur-[18px] backdrop-saturate-150 max-[760px]:p-5"
+    >
+      <div class="mb-5">
+        <h2 class="m-0 text-[1.55rem] font-black tracking-[-0.03em]">
+          Primary Stream Matcher Defaults
+        </h2>
+        <p class="mt-2 text-[0.92rem] text-[var(--text-muted)]">
+          Used when stream mode is "Primary" and no exact stream index map is
+          selected.
+        </p>
+      </div>
+
+      <div class="grid gap-4">
+        <div class="grid gap-2">
+          <label class="text-[0.82rem] font-semibold text-[var(--text-muted)]"
+            >Preferred Audio Language</label
+          >
+          <input
+            v-model="draftAudioLanguage"
+            class="w-40 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[var(--text)] outline-none focus:border-[rgba(109,212,236,0.35)]"
+            type="text"
+            placeholder="eng"
+          />
+        </div>
+
+        <div class="grid gap-2">
+          <label class="text-[0.82rem] font-semibold text-[var(--text-muted)]"
+            >Preferred Subtitle Language</label
+          >
+          <input
+            v-model="draftSubtitleLanguage"
+            class="w-40 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[var(--text)] outline-none focus:border-[rgba(109,212,236,0.35)]"
+            type="text"
+            placeholder="eng"
+          />
+        </div>
+
+        <label
+          class="inline-flex items-center gap-2 text-[0.86rem] text-[var(--text-muted)]"
+        >
+          <input
+            v-model="draftPreferDefaultAudio"
+            type="checkbox"
+            class="h-4 w-4 accent-[var(--accent)]"
+          />
+          Prefer default-flagged audio stream first
+        </label>
+
+        <label
+          class="inline-flex items-center gap-2 text-[0.86rem] text-[var(--text-muted)]"
+        >
+          <input
+            v-model="draftPreferDefaultSubtitle"
+            type="checkbox"
+            class="h-4 w-4 accent-[var(--accent)]"
+          />
+          Prefer forced/default subtitle stream first
+        </label>
+
+        <div class="flex items-center gap-3">
+          <button
+            class="rounded-full border border-[rgba(109,212,236,0.35)] bg-[rgba(109,212,236,0.13)] px-4 py-2 text-[0.84rem] font-bold text-[var(--text)] transition-colors hover:bg-[rgba(109,212,236,0.2)] disabled:opacity-50"
+            type="button"
+            :disabled="savingMatcherDefaults"
+            @click="saveStreamMatchingDefaults"
+          >
+            {{ savingMatcherDefaults ? "Saving..." : "Save Matcher Defaults" }}
+          </button>
+        </div>
+
+        <p
+          v-if="matcherSaveOk"
+          class="m-0 text-[0.82rem] text-[var(--success)]"
+        >
+          {{ matcherSaveOk }}
+        </p>
+        <p
+          v-if="matcherSaveError"
+          class="m-0 text-[0.82rem] text-[var(--danger)]"
+        >
+          {{ matcherSaveError }}
         </p>
       </div>
     </article>

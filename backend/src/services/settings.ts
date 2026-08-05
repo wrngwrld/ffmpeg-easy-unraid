@@ -17,9 +17,17 @@ export interface TranscodeDefaults {
   subtitleMode: SubtitleMode;
 }
 
+export interface StreamMatchingDefaults {
+  audioLanguage: string;
+  subtitleLanguage: string;
+  preferDefaultAudio: boolean;
+  preferDefaultSubtitle: boolean;
+}
+
 export interface AppSettings {
   parallelJobs: number;
   defaultTranscode: TranscodeDefaults;
+  defaultStreamMatching: StreamMatchingDefaults;
 }
 
 function clampParallelJobs(value: number): number {
@@ -65,10 +73,34 @@ function normalizeDefaultTranscode(
   };
 }
 
+function normalizeLanguage(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim().toLowerCase();
+  return trimmed.length ? trimmed : fallback;
+}
+
+function normalizeDefaultStreamMatching(
+  next: Partial<StreamMatchingDefaults> | undefined,
+): StreamMatchingDefaults {
+  return {
+    audioLanguage: normalizeLanguage(next?.audioLanguage, "eng"),
+    subtitleLanguage: normalizeLanguage(next?.subtitleLanguage, "eng"),
+    preferDefaultAudio:
+      typeof next?.preferDefaultAudio === "boolean"
+        ? next.preferDefaultAudio
+        : true,
+    preferDefaultSubtitle:
+      typeof next?.preferDefaultSubtitle === "boolean"
+        ? next.preferDefaultSubtitle
+        : true,
+  };
+}
+
 function defaultSettings(): AppSettings {
   return {
     parallelJobs: clampParallelJobs(PARALLEL_JOBS),
     defaultTranscode: normalizeDefaultTranscode(undefined),
+    defaultStreamMatching: normalizeDefaultStreamMatching(undefined),
   };
 }
 
@@ -79,6 +111,9 @@ function readRaw(): AppSettings {
     return {
       parallelJobs: clampParallelJobs(parsed.parallelJobs ?? PARALLEL_JOBS),
       defaultTranscode: normalizeDefaultTranscode(parsed.defaultTranscode),
+      defaultStreamMatching: normalizeDefaultStreamMatching(
+        parsed.defaultStreamMatching,
+      ),
     };
   } catch {
     return defaultSettings();
@@ -93,6 +128,9 @@ export function writeSettings(next: AppSettings): AppSettings {
   const normalized: AppSettings = {
     parallelJobs: clampParallelJobs(next.parallelJobs),
     defaultTranscode: normalizeDefaultTranscode(next.defaultTranscode),
+    defaultStreamMatching: normalizeDefaultStreamMatching(
+      next.defaultStreamMatching,
+    ),
   };
 
   fs.mkdirSync(CONFIG_DIR, { recursive: true });

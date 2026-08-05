@@ -7,12 +7,17 @@ import {
   getJobs,
   getParallelJobs,
 } from "../services/jobQueue.js";
-import { getAvailableEncoders } from "../services/ffmpeg.js";
+import {
+  getAvailableEncoders,
+  pickPrimaryStreamMap,
+  probeMediaStreams,
+} from "../services/ffmpeg.js";
 import type {
   AudioMode,
   EncoderChoice,
   StreamSelection,
   SubtitleMode,
+  StreamMapSelection,
 } from "../services/jobQueue.js";
 import { MEDIA_DIR, MEDIA_EXTENSIONS } from "../config.js";
 import { readSettings } from "../services/settings.js";
@@ -22,6 +27,11 @@ interface TranscodeBody {
   qp?: number;
   encoder?: string;
   streamSelection?: string;
+  streamMap?: {
+    videoIndex?: number;
+    audioIndex?: number | null;
+    subtitleIndex?: number | null;
+  };
   audioMode?: string;
   subtitleMode?: string;
 }
@@ -31,8 +41,55 @@ interface TranscodeFolderBody {
   qp?: number;
   encoder?: string;
   streamSelection?: string;
+  streamMap?: {
+    videoIndex?: number;
+    audioIndex?: number | null;
+    subtitleIndex?: number | null;
+  };
   audioMode?: string;
   subtitleMode?: string;
+}
+
+function normalizeStreamMap(
+  streamMap: TranscodeBody["streamMap"] | undefined,
+): StreamMapSelection | undefined {
+  if (!streamMap) return undefined;
+
+  const norm: StreamMapSelection = {};
+
+  if (streamMap.videoIndex !== undefined) {
+    if (!Number.isInteger(streamMap.videoIndex) || streamMap.videoIndex < 0) {
+      throw new Error("streamMap.videoIndex must be a non-negative integer");
+    }
+    norm.videoIndex = streamMap.videoIndex;
+  }
+
+  if (streamMap.audioIndex === null) {
+    norm.audioIndex = null;
+  } else if (streamMap.audioIndex !== undefined) {
+    if (!Number.isInteger(streamMap.audioIndex) || streamMap.audioIndex < 0) {
+      throw new Error(
+        "streamMap.audioIndex must be a non-negative integer or null",
+      );
+    }
+    norm.audioIndex = streamMap.audioIndex;
+  }
+
+  if (streamMap.subtitleIndex === null) {
+    norm.subtitleIndex = null;
+  } else if (streamMap.subtitleIndex !== undefined) {
+    if (
+      !Number.isInteger(streamMap.subtitleIndex) ||
+      streamMap.subtitleIndex < 0
+    ) {
+      throw new Error(
+        "streamMap.subtitleIndex must be a non-negative integer or null",
+      );
+    }
+    norm.subtitleIndex = streamMap.subtitleIndex;
+  }
+
+  return norm;
 }
 
 function pickEncoder(encoder: string | undefined): EncoderChoice {
@@ -127,10 +184,13 @@ const transcodeRoute: FastifyPluginAsync = async (fastify) => {
         qp,
         encoder,
         streamSelection,
+        streamMap,
         audioMode,
         subtitleMode,
       } = req.body ?? {};
-      const defaults = readSettings().defaultTranscode;
+      const appSettings = readSettings();
+      const defaults = appSettings.defaultTranscode;
+      const streamPrefs = appSettings.defaultStreamMatching;
 
       if (
         !sourcePath ||
@@ -155,16 +215,33 @@ const transcodeRoute: FastifyPluginAsync = async (fastify) => {
       const chosenStreamSelection = pickStreamSelection(
         streamSelection ?? defaults.streamSelection,
       );
+      let chosenStreamMap: StreamMapSelection | undefined;
+      try {
+        chosenStreamMap = normalizeStreamMap(streamMap);
+      } catch (err) {
+        return reply
+          .code(400)
+          .send({ error: err instanceof Error ? err.message : String(err) });
+      }
       const chosenAudioMode = pickAudioMode(audioMode ?? defaults.audioMode);
       const chosenSubtitleMode = pickSubtitleMode(
         subtitleMode ?? defaults.subtitleMode,
       );
+
+      if (chosenStreamSelection === "primary" && !chosenStreamMap) {
+        const abs = safePath(sourcePath.trim());
+        if (abs) {
+          const probed = probeMediaStreams(abs);
+          chosenStreamMap = pickPrimaryStreamMap(probed, streamPrefs);
+        }
+      }
 
       const job = addJob(
         sourcePath.trim(),
         effectiveQp,
         chosenEncoder,
         chosenStreamSelection,
+        chosenStreamMap,
         chosenAudioMode,
         chosenSubtitleMode,
       );
@@ -180,10 +257,13 @@ const transcodeRoute: FastifyPluginAsync = async (fastify) => {
         qp,
         encoder,
         streamSelection,
+        streamMap,
         audioMode,
         subtitleMode,
       } = req.body ?? {};
-      const defaults = readSettings().defaultTranscode;
+      const appSettings = readSettings();
+      const defaults = appSettings.defaultTranscode;
+      const streamPrefs = appSettings.defaultStreamMatching;
 
       if (
         !folderPath ||
@@ -228,20 +308,35 @@ const transcodeRoute: FastifyPluginAsync = async (fastify) => {
       const chosenStreamSelection = pickStreamSelection(
         streamSelection ?? defaults.streamSelection,
       );
+      if (streamMap !== undefined) {
+        return reply.code(400).send({
+          error:
+            "streamMap is only supported for single-file jobs, not folder queueing",
+        });
+      }
       const chosenAudioMode = pickAudioMode(audioMode ?? defaults.audioMode);
       const chosenSubtitleMode = pickSubtitleMode(
         subtitleMode ?? defaults.subtitleMode,
       );
-      const jobs = files.map((sourcePath) =>
-        addJob(
+      const jobs = files.map((sourcePath) => {
+        const autoStreamMap =
+          chosenStreamSelection === "primary"
+            ? pickPrimaryStreamMap(
+                probeMediaStreams(path.join(MEDIA_DIR, sourcePath)),
+                streamPrefs,
+              )
+            : undefined;
+
+        return addJob(
           sourcePath,
           effectiveQp,
           chosenEncoder,
           chosenStreamSelection,
+          autoStreamMap,
           chosenAudioMode,
           chosenSubtitleMode,
-        ),
-      );
+        );
+      });
 
       return reply
         .code(201)

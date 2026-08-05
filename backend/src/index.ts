@@ -9,6 +9,7 @@ import streamRoute from "./routes/stream.js";
 import historyRoute from "./routes/history.js";
 import eventsRoute from "./routes/events.js";
 import settingsRoute from "./routes/settings.js";
+import approvalsRoute from "./routes/approvals.js";
 
 async function main(): Promise<void> {
   await mkdir(CONFIG_DIR, { recursive: true });
@@ -38,6 +39,7 @@ async function main(): Promise<void> {
   await app.register(settingsRoute);
   await app.register(streamRoute);
   await app.register(historyRoute);
+  await app.register(approvalsRoute);
 
   // SPA static files
   await app.register(staticPlugin, { root: STATIC_ROOT, prefix: "/" });

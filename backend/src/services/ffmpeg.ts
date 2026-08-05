@@ -10,6 +10,33 @@ export interface HdrInfo {
   colorRange?: string;
 }
 
+export interface MediaStreamInfo {
+  index: number;
+  codecType: "video" | "audio" | "subtitle" | "other";
+  codecName?: string;
+  width?: number;
+  height?: number;
+  channels?: number;
+  channelLayout?: string;
+  language?: string;
+  title?: string;
+  isDefault?: boolean;
+  isForced?: boolean;
+}
+
+export interface StreamMapSelection {
+  videoIndex?: number;
+  audioIndex?: number | null;
+  subtitleIndex?: number | null;
+}
+
+export interface StreamSelectionPrefs {
+  audioLanguage?: string;
+  subtitleLanguage?: string;
+  preferDefaultAudio?: boolean;
+  preferDefaultSubtitle?: boolean;
+}
+
 export type HardwareEncoder = "vaapi" | "videotoolbox";
 
 let _availableHardwareEncoders: Set<HardwareEncoder> | null = null;
@@ -170,6 +197,167 @@ export function getFileDuration(filePath: string): number | null {
   return isNaN(val) ? null : val;
 }
 
+export function probeMediaStreams(filePath: string): MediaStreamInfo[] {
+  const result = spawnSync(
+    "ffprobe",
+    [
+      "-v",
+      "error",
+      "-show_entries",
+      "stream=index,codec_type,codec_name,width,height,channels,channel_layout:stream_disposition=default,forced:stream_tags=language,title",
+      "-of",
+      "json",
+      filePath,
+    ],
+    { timeout: 10_000, stdio: "pipe", encoding: "utf8" },
+  );
+
+  if (result.status !== 0) return [];
+
+  try {
+    const parsed = JSON.parse(result.stdout ?? "{}") as {
+      streams?: Array<{
+        index?: number;
+        codec_type?: string;
+        codec_name?: string;
+        width?: number;
+        height?: number;
+        channels?: number;
+        channel_layout?: string;
+        disposition?: { default?: number; forced?: number };
+        tags?: { language?: string; title?: string };
+      }>;
+    };
+
+    return (parsed.streams ?? []).flatMap((s) => {
+      const idx = s.index;
+      if (typeof idx !== "number" || !Number.isInteger(idx)) return [];
+      const streamIndex: number = idx;
+      const codecType =
+        s.codec_type === "video" ||
+        s.codec_type === "audio" ||
+        s.codec_type === "subtitle"
+          ? s.codec_type
+          : "other";
+      return [
+        {
+          index: streamIndex,
+          codecType,
+          codecName: s.codec_name,
+          width: Number.isFinite(s.width) ? s.width : undefined,
+          height: Number.isFinite(s.height) ? s.height : undefined,
+          channels: Number.isFinite(s.channels) ? s.channels : undefined,
+          channelLayout: s.channel_layout,
+          language: s.tags?.language,
+          title: s.tags?.title,
+          isDefault: s.disposition?.default === 1,
+          isForced: s.disposition?.forced === 1,
+        } satisfies MediaStreamInfo,
+      ];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function normalizeLang(lang: string | undefined): string | null {
+  if (!lang) return null;
+  const cleaned = lang.trim().toLowerCase();
+  return cleaned.length ? cleaned : null;
+}
+
+function pickByLanguage(
+  streams: MediaStreamInfo[],
+  preferredLang: string | undefined,
+): MediaStreamInfo | undefined {
+  const lang = normalizeLang(preferredLang);
+  if (!lang) return undefined;
+
+  const aliases =
+    lang === "eng" ? ["eng", "en"] : lang === "en" ? ["en", "eng"] : [lang];
+
+  return streams.find((s) => {
+    const streamLang = normalizeLang(s.language);
+    return streamLang ? aliases.includes(streamLang) : false;
+  });
+}
+
+function pickAudioStream(
+  candidates: MediaStreamInfo[],
+  prefs: StreamSelectionPrefs,
+): MediaStreamInfo | undefined {
+  if (!candidates.length) return undefined;
+
+  if (prefs.preferDefaultAudio) {
+    const d = candidates.find((s) => s.isDefault);
+    if (d) return d;
+  }
+
+  const byLang = pickByLanguage(candidates, prefs.audioLanguage);
+  if (byLang) return byLang;
+
+  if (!prefs.preferDefaultAudio) {
+    const d = candidates.find((s) => s.isDefault);
+    if (d) return d;
+  }
+
+  // Common sane fallback for media libraries when explicit lang isn't available.
+  const fallbackEnglish = pickByLanguage(candidates, "eng");
+  if (fallbackEnglish) return fallbackEnglish;
+
+  return candidates[0];
+}
+
+function pickSubtitleStream(
+  candidates: MediaStreamInfo[],
+  prefs: StreamSelectionPrefs,
+): MediaStreamInfo | undefined {
+  if (!candidates.length) return undefined;
+
+  if (prefs.preferDefaultSubtitle) {
+    const forced = candidates.find((s) => s.isForced);
+    if (forced) return forced;
+    const d = candidates.find((s) => s.isDefault);
+    if (d) return d;
+  }
+
+  const byLang = pickByLanguage(candidates, prefs.subtitleLanguage);
+  if (byLang) return byLang;
+
+  if (!prefs.preferDefaultSubtitle) {
+    const forced = candidates.find((s) => s.isForced);
+    if (forced) return forced;
+    const d = candidates.find((s) => s.isDefault);
+    if (d) return d;
+  }
+
+  const fallbackEnglish = pickByLanguage(candidates, "eng");
+  if (fallbackEnglish) return fallbackEnglish;
+
+  return candidates[0];
+}
+
+export function pickPrimaryStreamMap(
+  streams: MediaStreamInfo[],
+  prefs: StreamSelectionPrefs,
+): StreamMapSelection {
+  const video = streams.find((s) => s.codecType === "video");
+  const audio = pickAudioStream(
+    streams.filter((s) => s.codecType === "audio"),
+    prefs,
+  );
+  const subtitle = pickSubtitleStream(
+    streams.filter((s) => s.codecType === "subtitle"),
+    prefs,
+  );
+
+  return {
+    videoIndex: video?.index,
+    audioIndex: audio?.index ?? null,
+    subtitleIndex: subtitle?.index ?? null,
+  };
+}
+
 export interface SpawnOptions {
   id: string;
   sourcePath: string;
@@ -177,6 +365,7 @@ export interface SpawnOptions {
   qp: number;
   encoder: "vaapi" | "videotoolbox" | "software";
   streamSelection: "all" | "primary";
+  streamMap?: StreamMapSelection;
   audioMode: "copy" | "aac";
   subtitleMode: "copy" | "drop";
   durationSeconds: number | null;
@@ -194,6 +383,7 @@ export function spawnTranscode({
   qp,
   encoder,
   streamSelection,
+  streamMap,
   audioMode,
   subtitleMode,
   durationSeconds,
@@ -234,9 +424,29 @@ export function spawnTranscode({
   args.push("-i", sourceAbs);
 
   if (streamSelection === "primary") {
-    args.push("-map", "0:v:0", "-map", "0:a:0?");
+    const videoMap = Number.isInteger(streamMap?.videoIndex)
+      ? `0:${streamMap!.videoIndex}`
+      : "0:v:0";
+    args.push("-map", videoMap);
+
+    if (streamMap?.audioIndex === null) {
+      // Explicitly skip audio when user selected no audio stream.
+    } else {
+      const audioMap = Number.isInteger(streamMap?.audioIndex)
+        ? `0:${streamMap!.audioIndex}?`
+        : "0:a:0?";
+      args.push("-map", audioMap);
+    }
+
     if (subtitleMode === "copy") {
-      args.push("-map", "0:s:0?");
+      if (streamMap?.subtitleIndex === null) {
+        // Explicitly skip subtitles when user selected none.
+      } else {
+        const subtitleMap = Number.isInteger(streamMap?.subtitleIndex)
+          ? `0:${streamMap!.subtitleIndex}?`
+          : "0:s:0?";
+        args.push("-map", subtitleMap);
+      }
     }
   } else {
     args.push("-map", "0");

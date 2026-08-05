@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import fs from "node:fs";
 import path from "node:path";
 import { MEDIA_DIR, MEDIA_EXTENSIONS } from "../config.js";
+import { probeMediaStreams } from "../services/ffmpeg.js";
 
 interface FsEntry {
   name: string;
@@ -73,6 +74,36 @@ const fsRoute: FastifyPluginAsync = async (fastify) => {
       const relPath = "/" + path.relative(MEDIA_DIR, abs).replace(/\\/g, "/");
 
       return { path: relPath === "/." ? "/" : relPath, entries };
+    },
+  );
+
+  fastify.get<{ Querystring: { path?: string } }>(
+    "/api/fs/streams",
+    async (req, reply) => {
+      const reqPath = req.query.path ?? "";
+      if (!reqPath || typeof reqPath !== "string") {
+        return reply.code(400).send({ error: "path is required" });
+      }
+
+      const abs = safePath(reqPath);
+      if (!abs) return reply.code(400).send({ error: "Invalid path" });
+
+      let st: fs.Stats;
+      try {
+        st = fs.statSync(abs);
+      } catch {
+        return reply.code(404).send({ error: "File not found" });
+      }
+
+      if (!st.isFile()) {
+        return reply.code(400).send({ error: "path must be a file" });
+      }
+
+      const streams = probeMediaStreams(abs);
+      return {
+        path: reqPath,
+        streams,
+      };
     },
   );
 };

@@ -5,10 +5,13 @@ import type {
   AppSettingsLimits,
   EncoderChoice,
   Job,
+  StreamMatchingDefaults,
   TranscodeDefaults,
 } from "../types.ts";
 
 const DEFAULT_TRANSCODE_STORAGE_KEY = "transcode-harbor.defaultTranscode";
+const DEFAULT_STREAM_MATCHING_STORAGE_KEY =
+  "transcode-harbor.defaultStreamMatching";
 
 function normalizeDefaults(
   next: Partial<TranscodeDefaults> | undefined,
@@ -45,6 +48,46 @@ function loadLocalDefaults(): TranscodeDefaults | null {
   }
 }
 
+function normalizeStreamMatchingDefaults(
+  next: Partial<StreamMatchingDefaults> | undefined,
+): StreamMatchingDefaults {
+  const audioLanguage =
+    typeof next?.audioLanguage === "string" && next.audioLanguage.trim()
+      ? next.audioLanguage.trim().toLowerCase()
+      : "eng";
+  const subtitleLanguage =
+    typeof next?.subtitleLanguage === "string" && next.subtitleLanguage.trim()
+      ? next.subtitleLanguage.trim().toLowerCase()
+      : "eng";
+
+  return {
+    audioLanguage,
+    subtitleLanguage,
+    preferDefaultAudio:
+      typeof next?.preferDefaultAudio === "boolean"
+        ? next.preferDefaultAudio
+        : true,
+    preferDefaultSubtitle:
+      typeof next?.preferDefaultSubtitle === "boolean"
+        ? next.preferDefaultSubtitle
+        : true,
+  };
+}
+
+function loadLocalStreamMatchingDefaults(): StreamMatchingDefaults | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(
+      DEFAULT_STREAM_MATCHING_STORAGE_KEY,
+    );
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StreamMatchingDefaults>;
+    return normalizeStreamMatchingDefaults(parsed);
+  } catch {
+    return null;
+  }
+}
+
 function saveLocalDefaults(next: TranscodeDefaults): void {
   if (typeof window === "undefined") return;
   try {
@@ -57,8 +100,21 @@ function saveLocalDefaults(next: TranscodeDefaults): void {
   }
 }
 
+function saveLocalStreamMatchingDefaults(next: StreamMatchingDefaults): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      DEFAULT_STREAM_MATCHING_STORAGE_KEY,
+      JSON.stringify(next),
+    );
+  } catch {
+    /* ignore storage errors */
+  }
+}
+
 export const useStatusStore = defineStore("status", () => {
   const localDefaults = loadLocalDefaults();
+  const localStreamMatchingDefaults = loadLocalStreamMatchingDefaults();
 
   const availableEncoders = ref<EncoderChoice[]>(["software"]);
   const hardwareAvailable = ref<boolean | null>(null);
@@ -71,6 +127,14 @@ export const useStatusStore = defineStore("status", () => {
       streamSelection: "all",
       audioMode: "copy",
       subtitleMode: "copy",
+    }),
+  });
+  const defaultStreamMatching = ref<StreamMatchingDefaults>({
+    ...(localStreamMatchingDefaults ?? {
+      audioLanguage: "eng",
+      subtitleLanguage: "eng",
+      preferDefaultAudio: true,
+      preferDefaultSubtitle: true,
     }),
   });
   const settingsLimits = ref<AppSettingsLimits>({ min: 1, max: 8 });
@@ -95,6 +159,13 @@ export const useStatusStore = defineStore("status", () => {
     if (settings?.defaultTranscode) {
       defaultTranscode.value = normalizeDefaults(settings.defaultTranscode);
       saveLocalDefaults(defaultTranscode.value);
+    }
+
+    if (settings?.defaultStreamMatching) {
+      defaultStreamMatching.value = normalizeStreamMatchingDefaults(
+        settings.defaultStreamMatching,
+      );
+      saveLocalStreamMatchingDefaults(defaultStreamMatching.value);
     }
   }
 
@@ -158,6 +229,37 @@ export const useStatusStore = defineStore("status", () => {
       ...next,
     });
     saveLocalDefaults(defaultTranscode.value);
+
+    const data = (await res.json()) as {
+      settings?: AppSettings;
+      defaults?: AppSettings;
+    };
+    applySettings(data.settings);
+    applySettings(data.defaults);
+  }
+
+  async function updateDefaultStreamMatching(
+    next: Partial<StreamMatchingDefaults>,
+  ): Promise<void> {
+    const res = await fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        parallelJobs: parallelJobs.value,
+        defaultStreamMatching: next,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(err.error ?? `HTTP ${res.status}`);
+    }
+
+    defaultStreamMatching.value = normalizeStreamMatchingDefaults({
+      ...defaultStreamMatching.value,
+      ...next,
+    });
+    saveLocalStreamMatchingDefaults(defaultStreamMatching.value);
 
     const data = (await res.json()) as {
       settings?: AppSettings;
@@ -244,10 +346,12 @@ export const useStatusStore = defineStore("status", () => {
     jobs,
     parallelJobs,
     defaultTranscode,
+    defaultStreamMatching,
     settingsLimits,
     init,
     loadSettings,
     updateParallelJobs,
     updateDefaultTranscode,
+    updateDefaultStreamMatching,
   };
 });

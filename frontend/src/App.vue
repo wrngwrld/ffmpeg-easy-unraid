@@ -4,6 +4,7 @@ import { RouterLink, RouterView } from "vue-router";
 const nav = [
   { to: "/browse", label: "Browse" },
   { to: "/queue", label: "Queue" },
+  { to: "/approvals", label: "Approvals" },
   { to: "/history", label: "History" },
   { to: "/system", label: "System" },
 ];

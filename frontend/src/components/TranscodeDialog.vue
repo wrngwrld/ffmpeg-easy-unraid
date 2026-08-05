@@ -6,6 +6,8 @@ import type {
   AudioMode,
   EncoderChoice,
   FsEntry,
+  MediaStreamInfo,
+  StreamMapSelection,
   StreamSelection,
   SubtitleMode,
 } from "../types.ts";
@@ -21,6 +23,11 @@ const encoder = ref<EncoderChoice>(status.defaultTranscode.encoder);
 const streamSelection = ref<StreamSelection>(
   status.defaultTranscode.streamSelection,
 );
+const availableStreams = ref<MediaStreamInfo[]>([]);
+const streamsLoading = ref(false);
+const selectedVideoIndex = ref<number | null>(null);
+const selectedAudioIndex = ref<number | null>(null);
+const selectedSubtitleIndex = ref<number | null>(null);
 const audioMode = ref<AudioMode>(status.defaultTranscode.audioMode);
 const subtitleMode = ref<SubtitleMode>(status.defaultTranscode.subtitleMode);
 const submitting = ref(false);
@@ -32,6 +39,19 @@ const canVideoToolbox = computed(() =>
   status.availableEncoders.includes("videotoolbox"),
 );
 const isDirectory = computed(() => props.entry.type === "directory");
+const isPrimarySelection = computed(
+  () => streamSelection.value === "primary" && !isDirectory.value,
+);
+
+const videoStreams = computed(() =>
+  availableStreams.value.filter((s) => s.codecType === "video"),
+);
+const audioStreams = computed(() =>
+  availableStreams.value.filter((s) => s.codecType === "audio"),
+);
+const subtitleStreams = computed(() =>
+  availableStreams.value.filter((s) => s.codecType === "subtitle"),
+);
 
 watch(
   () => [status.availableEncoders, status.defaultTranscode] as const,
@@ -67,11 +87,82 @@ function formatSize(bytes?: number): string {
   return `${(bytes / 1024).toFixed(0)} KB`;
 }
 
+function streamLabel(s: MediaStreamInfo): string {
+  if (s.codecType === "video") {
+    const dim = s.width && s.height ? ` ${s.width}x${s.height}` : "";
+    return `#${s.index} ${s.codecName ?? "video"}${dim}`;
+  }
+  if (s.codecType === "audio") {
+    const ch = s.channels ? ` ${s.channels}ch` : "";
+    const lang = s.language ? ` ${s.language}` : "";
+    return `#${s.index} ${s.codecName ?? "audio"}${ch}${lang}`;
+  }
+  const lang = s.language ? ` ${s.language}` : "";
+  const title = s.title ? ` ${s.title}` : "";
+  return `#${s.index} ${s.codecName ?? "subtitle"}${lang}${title}`;
+}
+
+async function loadStreams(): Promise<void> {
+  if (isDirectory.value) {
+    availableStreams.value = [];
+    selectedVideoIndex.value = null;
+    selectedAudioIndex.value = null;
+    selectedSubtitleIndex.value = null;
+    return;
+  }
+
+  streamsLoading.value = true;
+  try {
+    const res = await fetch(
+      `/api/fs/streams?path=${encodeURIComponent(props.path)}`,
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = (await res.json()) as { streams?: MediaStreamInfo[] };
+    const streams = data.streams ?? [];
+    availableStreams.value = streams;
+
+    const firstVideo = streams.find((s) => s.codecType === "video");
+    const firstAudio = streams.find((s) => s.codecType === "audio");
+    const firstSubtitle = streams.find((s) => s.codecType === "subtitle");
+    selectedVideoIndex.value = firstVideo?.index ?? null;
+    selectedAudioIndex.value = firstAudio?.index ?? null;
+    selectedSubtitleIndex.value = firstSubtitle?.index ?? null;
+  } catch {
+    availableStreams.value = [];
+    selectedVideoIndex.value = null;
+    selectedAudioIndex.value = null;
+    selectedSubtitleIndex.value = null;
+  } finally {
+    streamsLoading.value = false;
+  }
+}
+
+watch(
+  () => props.path,
+  () => {
+    void loadStreams();
+  },
+  { immediate: true },
+);
+
 async function submit(): Promise<void> {
   submitting.value = true;
   errorMsg.value = null;
   successMsg.value = null;
   try {
+    const streamMap: StreamMapSelection | undefined = isPrimarySelection.value
+      ? {
+          videoIndex: selectedVideoIndex.value ?? undefined,
+          audioIndex: selectedAudioIndex.value,
+          subtitleIndex:
+            subtitleMode.value === "copy" ? selectedSubtitleIndex.value : null,
+        }
+      : undefined;
+
+    if (isPrimarySelection.value && selectedVideoIndex.value == null) {
+      throw new Error("Please select a video stream for primary mode.");
+    }
+
     if (isDirectory.value) {
       const queued = await queue.submitFolder(
         props.path,
@@ -92,6 +183,7 @@ async function submit(): Promise<void> {
       qp.value,
       encoder.value,
       streamSelection.value,
+      streamMap,
       audioMode.value,
       subtitleMode.value,
     );
@@ -171,6 +263,70 @@ async function submit(): Promise<void> {
           <span>0 — lossless</span><span>22 — default</span
           ><span>51 — worst</span>
         </div>
+      </div>
+
+      <div v-if="isPrimarySelection" class="mb-[22px] grid gap-3">
+        <p class="m-0 text-[0.8rem] text-[var(--text-dim)]">
+          Select exact streams to keep for this file.
+        </p>
+
+        <div
+          v-if="streamsLoading"
+          class="text-[0.84rem] text-[var(--text-muted)]"
+        >
+          Loading available streams...
+        </div>
+
+        <template v-else>
+          <div class="grid gap-1.5">
+            <label class="text-[0.82rem] font-semibold text-[var(--text-muted)]"
+              >Video Stream</label
+            >
+            <select
+              v-model="selectedVideoIndex"
+              class="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[0.86rem] text-[var(--text)] outline-none"
+            >
+              <option :value="null" disabled>Select a video stream</option>
+              <option v-for="s in videoStreams" :key="s.index" :value="s.index">
+                {{ streamLabel(s) }}
+              </option>
+            </select>
+          </div>
+
+          <div class="grid gap-1.5">
+            <label class="text-[0.82rem] font-semibold text-[var(--text-muted)]"
+              >Audio Stream</label
+            >
+            <select
+              v-model="selectedAudioIndex"
+              class="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[0.86rem] text-[var(--text)] outline-none"
+            >
+              <option :value="null">No audio</option>
+              <option v-for="s in audioStreams" :key="s.index" :value="s.index">
+                {{ streamLabel(s) }}
+              </option>
+            </select>
+          </div>
+
+          <div v-if="subtitleMode === 'copy'" class="grid gap-1.5">
+            <label class="text-[0.82rem] font-semibold text-[var(--text-muted)]"
+              >Subtitle Stream</label
+            >
+            <select
+              v-model="selectedSubtitleIndex"
+              class="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[0.86rem] text-[var(--text)] outline-none"
+            >
+              <option :value="null">No subtitles</option>
+              <option
+                v-for="s in subtitleStreams"
+                :key="s.index"
+                :value="s.index"
+              >
+                {{ streamLabel(s) }}
+              </option>
+            </select>
+          </div>
+        </template>
       </div>
 
       <div class="mb-[22px]">

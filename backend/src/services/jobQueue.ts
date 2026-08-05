@@ -10,10 +10,16 @@ import {
   isEncoderAvailable,
 } from "./ffmpeg.js";
 import { recordEntry } from "./stats.js";
+import { upsertApproval } from "./approvals.js";
 
 export type JobState = "queued" | "running" | "done" | "failed" | "cancelled";
 export type EncoderChoice = "vaapi" | "videotoolbox" | "software";
 export type StreamSelection = "all" | "primary";
+export interface StreamMapSelection {
+  videoIndex?: number;
+  audioIndex?: number | null;
+  subtitleIndex?: number | null;
+}
 export type AudioMode = "copy" | "aac";
 export type SubtitleMode = "copy" | "drop";
 
@@ -24,6 +30,7 @@ export interface Job {
   qp: number;
   encoder: EncoderChoice;
   streamSelection: StreamSelection;
+  streamMap?: StreamMapSelection;
   audioMode: AudioMode;
   subtitleMode: SubtitleMode;
   state: JobState;
@@ -83,6 +90,7 @@ export function addJob(
   qp: number,
   encoder: EncoderChoice,
   streamSelection: StreamSelection = "all",
+  streamMap: StreamMapSelection | undefined = undefined,
   audioMode: AudioMode = "copy",
   subtitleMode: SubtitleMode = "copy",
 ): Job {
@@ -100,6 +108,7 @@ export function addJob(
     qp,
     encoder: effectiveEncoder,
     streamSelection,
+    streamMap,
     audioMode,
     subtitleMode,
     state: "queued",
@@ -185,6 +194,7 @@ async function runJob(job: Job): Promise<void> {
       qp: job.qp,
       encoder: job.encoder,
       streamSelection: job.streamSelection,
+      streamMap: job.streamMap,
       audioMode: job.audioMode,
       subtitleMode: job.subtitleMode,
       durationSeconds,
@@ -240,6 +250,18 @@ async function runJob(job: Job): Promise<void> {
       inputBytes,
       outputBytes,
       savedBytes: job.savedBytes,
+      savedPercent: job.savedPercent,
+    });
+
+    upsertApproval({
+      sourcePath: job.sourcePath,
+      outputPath: job.outputPath,
+      createdAt: job.createdAt,
+      completedAt: job.finishedAt,
+      qp: job.qp,
+      encoder: job.encoder,
+      inputBytes: job.inputBytes,
+      outputBytes: job.outputBytes,
       savedPercent: job.savedPercent,
     });
 

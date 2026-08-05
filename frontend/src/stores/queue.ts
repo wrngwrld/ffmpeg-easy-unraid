@@ -4,6 +4,7 @@ import { useStatusStore } from "./status.ts";
 import type {
   AudioMode,
   EncoderChoice,
+  StreamMapSelection,
   StreamSelection,
   SubtitleMode,
 } from "../types.ts";
@@ -54,6 +55,7 @@ export const useQueueStore = defineStore("queue", () => {
     qp: number,
     encoder: EncoderChoice,
     streamSelection: StreamSelection,
+    streamMap: StreamMapSelection | undefined,
     audioMode: AudioMode,
     subtitleMode: SubtitleMode,
   ): Promise<void> {
@@ -65,6 +67,7 @@ export const useQueueStore = defineStore("queue", () => {
         qp,
         encoder,
         streamSelection,
+        streamMap,
         audioMode,
         subtitleMode,
       }),

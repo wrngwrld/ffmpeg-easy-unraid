@@ -1,8 +1,25 @@
 export type JobState = "queued" | "running" | "done" | "failed" | "cancelled";
 export type EncoderChoice = "vaapi" | "videotoolbox" | "software";
 export type StreamSelection = "all" | "primary";
+export interface StreamMapSelection {
+  videoIndex?: number;
+  audioIndex?: number | null;
+  subtitleIndex?: number | null;
+}
 export type AudioMode = "copy" | "aac";
 export type SubtitleMode = "copy" | "drop";
+
+export interface MediaStreamInfo {
+  index: number;
+  codecType: "video" | "audio" | "subtitle" | "other";
+  codecName?: string;
+  width?: number;
+  height?: number;
+  channels?: number;
+  channelLayout?: string;
+  language?: string;
+  title?: string;
+}
 
 export interface Job {
   id: string;
@@ -11,6 +28,7 @@ export interface Job {
   qp: number;
   encoder: EncoderChoice;
   streamSelection: StreamSelection;
+  streamMap?: StreamMapSelection;
   audioMode: AudioMode;
   subtitleMode: SubtitleMode;
   state: JobState;
@@ -52,6 +70,19 @@ export interface HistoryEntry {
   savedPercent: number;
 }
 
+export interface ApprovalItem {
+  id: string;
+  sourcePath: string;
+  outputPath: string;
+  createdAt: string;
+  completedAt: string;
+  qp: number;
+  encoder: EncoderChoice;
+  inputBytes: number | null;
+  outputBytes: number | null;
+  savedPercent: number | null;
+}
+
 export interface StatsTotals {
   processed: number;
   succeeded: number;
@@ -70,9 +101,17 @@ export interface TranscodeDefaults {
   subtitleMode: SubtitleMode;
 }
 
+export interface StreamMatchingDefaults {
+  audioLanguage: string;
+  subtitleLanguage: string;
+  preferDefaultAudio: boolean;
+  preferDefaultSubtitle: boolean;
+}
+
 export interface AppSettings {
   parallelJobs: number;
   defaultTranscode: TranscodeDefaults;
+  defaultStreamMatching: StreamMatchingDefaults;
 }
 
 export interface AppSettingsLimits {
