@@ -12,7 +12,6 @@ services:
 
     environment:
       - PARALLEL_JOBS=1
-      - ADMIN_PORT=8080
       - UNRAID_UID=1000
       - UNRAID_GID=1000
 

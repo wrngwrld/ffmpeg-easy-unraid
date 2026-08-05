@@ -79,11 +79,11 @@ On startup, the backend probes available hardware encoders. If none are availabl
 
 | Variable        | Default                                  | Description                                                         |
 | --------------- | ---------------------------------------- | ------------------------------------------------------------------- |
-| `ADMIN_PORT`    | `8080`                                   | HTTP port used by backend and served frontend.                      |
 | `PARALLEL_JOBS` | `1`                                      | Max concurrent transcode jobs. Minimum is 1.                        |
-| `STATIC_ROOT`   | auto                                     | Frontend assets path. In Docker: `/opt/transcode-harbor/web`.       |
 | `UNRAID_UID`    | `99` (image) / `1000` (compose example)  | Reserved for compatibility; currently not enforced by runtime code. |
 | `UNRAID_GID`    | `100` (image) / `1000` (compose example) | Reserved for compatibility; currently not enforced by runtime code. |
+
+`STATIC_ROOT` is an internal image/runtime path and usually should not be set in Unraid templates.
 
 ## API Overview
 
