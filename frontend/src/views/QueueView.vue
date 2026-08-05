@@ -31,8 +31,14 @@ interface BatchGroup {
 }
 
 const batchBusyMap = ref<Record<string, boolean>>({});
+const batchCollapsedMap = ref<Record<string, boolean>>({});
 const batchActionMsg = ref<string | null>(null);
 const batchActionErr = ref<string | null>(null);
+const confirmModalOpen = ref(false);
+const confirmModalTitle = ref("");
+const confirmModalText = ref("");
+const confirmModalConfirmLabel = ref("Confirm");
+let confirmModalResolver: ((answer: boolean) => void) | null = null;
 
 const batchById = computed(
   () => new Map(status.batches.map((batch) => [batch.id, batch] as const)),
@@ -108,7 +114,7 @@ const activeBatchGroups = computed<BatchGroup[]>(() => {
     const bCreated = b.batch
       ? new Date(b.batch.createdAt).getTime()
       : new Date(b.jobs[0]?.createdAt ?? 0).getTime();
-    return bCreated - aCreated;
+    return aCreated - bCreated;
   });
 });
 
@@ -119,12 +125,84 @@ function estimateRemainingSeconds(job: Job): number | null {
   return Math.round((job.elapsed * (100 - job.pct)) / job.pct);
 }
 
-const totalRunningEtaSeconds = computed(() =>
-  queue.activeJobs
+function estimateTotalJobSeconds(job: Job): number | null {
+  if (job.state !== "running") return null;
+  if (!Number.isFinite(job.elapsed) || job.elapsed <= 0) return null;
+  if (!Number.isFinite(job.pct) || job.pct <= 0 || job.pct >= 100) return null;
+  return (job.elapsed * 100) / job.pct;
+}
+
+const queueFinishEtaSeconds = computed<number | null>(() => {
+  const activeJobs = queue.activeJobs;
+  if (!activeJobs.length) return 0;
+
+  const parallel = Math.max(1, status.parallelJobs || 1);
+  const runningRemaining = activeJobs
+    .filter((job) => job.state === "running")
     .map(estimateRemainingSeconds)
-    .filter((v): v is number => v !== null)
-    .reduce((sum, secs) => sum + secs, 0),
-);
+    .filter((v): v is number => v !== null);
+  const queuedCount = activeJobs.filter((job) => job.state === "queued").length;
+
+  const totalSamples = [
+    ...status.jobs
+      .filter((job) => job.state === "done")
+      .map((job) =>
+        Number.isFinite(job.elapsed) && job.elapsed > 0 ? job.elapsed : null,
+      )
+      .filter((v): v is number => v !== null),
+    ...activeJobs
+      .map(estimateTotalJobSeconds)
+      .filter((v): v is number => v !== null),
+  ];
+
+  const perQueuedJobSeconds =
+    totalSamples.length > 0
+      ? totalSamples.reduce((sum, value) => sum + value, 0) /
+        totalSamples.length
+      : null;
+
+  if (
+    runningRemaining.length === 0 &&
+    queuedCount > 0 &&
+    perQueuedJobSeconds === null
+  ) {
+    return null;
+  }
+
+  const lanes = Array.from({ length: parallel }, () => 0);
+  for (let i = 0; i < runningRemaining.length; i += 1) {
+    lanes[i % parallel] = runningRemaining[i] ?? 0;
+  }
+
+  const queuedDuration = perQueuedJobSeconds ?? 0;
+  for (let i = 0; i < queuedCount; i += 1) {
+    let laneIndex = 0;
+    let minValue = lanes[0] ?? 0;
+    for (let lane = 1; lane < lanes.length; lane += 1) {
+      const value = lanes[lane] ?? 0;
+      if (value < minValue) {
+        minValue = value;
+        laneIndex = lane;
+      }
+    }
+    lanes[laneIndex] = minValue + queuedDuration;
+  }
+
+  return Math.max(...lanes);
+});
+
+const queueFinishEtaLabel = computed(() => {
+  const seconds = queueFinishEtaSeconds.value;
+  if (seconds === null) return "n/a";
+  if (seconds <= 0) return "now";
+
+  const finishAt = new Date(Date.now() + seconds * 1000);
+  const timeLabel = finishAt.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return `~${fmtDuration(Math.round(seconds))} (${timeLabel})`;
+});
 
 function fmtDuration(totalSeconds: number): string {
   const h = Math.floor(totalSeconds / 3600);
@@ -155,13 +233,45 @@ function subtitleLabel(mode: Batch["options"]["subtitleMode"]): string {
   return mode === "drop" ? "Drop" : "Copy";
 }
 
-function confirmCancelRemaining(group: BatchGroup): boolean {
-  if (typeof window === "undefined") return true;
-  const label = group.batch?.name ?? "this batch";
-  const queued = group.queuedCount;
-  return window.confirm(
-    `Cancel ${queued} queued item${queued === 1 ? "" : "s"} in \"${label}\"? Running jobs will continue.`,
-  );
+function isBatchCollapsed(groupId: string): boolean {
+  return batchCollapsedMap.value[groupId] === true;
+}
+
+function toggleBatchCollapsed(groupId: string): void {
+  batchCollapsedMap.value[groupId] = !isBatchCollapsed(groupId);
+}
+
+async function askForConfirmation(input: {
+  title: string;
+  text: string;
+  confirmLabel: string;
+}): Promise<boolean> {
+  confirmModalTitle.value = input.title;
+  confirmModalText.value = input.text;
+  confirmModalConfirmLabel.value = input.confirmLabel;
+  confirmModalOpen.value = true;
+
+  return new Promise<boolean>((resolve) => {
+    confirmModalResolver = resolve;
+  });
+}
+
+function confirmModalAccept(): void {
+  confirmModalOpen.value = false;
+  confirmModalTitle.value = "";
+  confirmModalText.value = "";
+  confirmModalConfirmLabel.value = "Confirm";
+  confirmModalResolver?.(true);
+  confirmModalResolver = null;
+}
+
+function confirmModalCancel(): void {
+  confirmModalOpen.value = false;
+  confirmModalTitle.value = "";
+  confirmModalText.value = "";
+  confirmModalConfirmLabel.value = "Confirm";
+  confirmModalResolver?.(false);
+  confirmModalResolver = null;
 }
 
 async function pauseBatch(batchId: string): Promise<void> {
@@ -194,7 +304,14 @@ async function resumeBatch(batchId: string): Promise<void> {
 
 async function cancelRemaining(group: BatchGroup): Promise<void> {
   if (!group.batch) return;
-  if (!confirmCancelRemaining(group)) return;
+  const label = group.batch?.name ?? "this batch";
+  const queued = group.queuedCount;
+  const ok = await askForConfirmation({
+    title: "Cancel Remaining Jobs",
+    text: `Cancel ${queued} queued item${queued === 1 ? "" : "s"} in \"${label}\"? Running jobs will continue.`,
+    confirmLabel: "Cancel Remaining",
+  });
+  if (!ok) return;
 
   const batchId = group.batch.id;
   batchBusyMap.value[batchId] = true;
@@ -274,14 +391,10 @@ async function cancelRemaining(group: BatchGroup): Promise<void> {
         <p
           class="m-0 text-[0.7rem] font-bold uppercase tracking-[0.14em] text-[var(--text-dim)]"
         >
-          Running ETA Sum
+          Queue Finish ETA
         </p>
         <p class="mt-1 text-[1.15rem] font-black">
-          {{
-            totalRunningEtaSeconds > 0
-              ? `~${fmtDuration(totalRunningEtaSeconds)}`
-              : "n/a"
-          }}
+          {{ queueFinishEtaLabel }}
         </p>
       </article>
     </div>
@@ -329,89 +442,103 @@ async function cancelRemaining(group: BatchGroup): Promise<void> {
             <div class="text-right text-[0.8rem] text-[var(--text-muted)]">
               <p class="m-0">{{ group.runningCount }} running</p>
               <p class="m-0">{{ group.queuedCount }} queued</p>
+              <button
+                class="mt-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[0.72rem] font-bold text-[var(--text)]"
+                type="button"
+                @click="toggleBatchCollapsed(group.id)"
+              >
+                {{ isBatchCollapsed(group.id) ? "Expand" : "Collapse" }}
+              </button>
             </div>
           </div>
 
-          <div
-            class="mb-3 rounded-full bg-white/10 h-2 overflow-hidden"
-            :title="`${group.doneCount} done, ${group.failedCount} failed, ${group.remainingCount} remaining`"
-          >
-            <div class="flex h-full w-full">
-              <div
-                class="h-full bg-[var(--success)]"
-                :style="{ width: `${group.donePct}%` }"
-              ></div>
-              <div
-                class="h-full bg-[var(--danger)]"
-                :style="{ width: `${group.failedPct}%` }"
-              ></div>
-              <div
-                class="h-full bg-white/15"
-                :style="{
-                  width: `${Math.max(0, 100 - group.donePct - group.failedPct)}%`,
-                }"
-              ></div>
+          <div v-if="!isBatchCollapsed(group.id)">
+            <div
+              class="mb-3 rounded-full bg-white/10 h-2 overflow-hidden"
+              :title="`${group.doneCount} done, ${group.failedCount} failed, ${group.remainingCount} remaining`"
+            >
+              <div class="flex h-full w-full">
+                <div
+                  class="h-full bg-[var(--success)]"
+                  :style="{ width: `${group.donePct}%` }"
+                ></div>
+                <div
+                  class="h-full bg-[var(--danger)]"
+                  :style="{ width: `${group.failedPct}%` }"
+                ></div>
+                <div
+                  class="h-full bg-white/15"
+                  :style="{
+                    width: `${Math.max(0, 100 - group.donePct - group.failedPct)}%`,
+                  }"
+                ></div>
+              </div>
             </div>
-          </div>
 
-          <div
-            class="mb-3 flex flex-wrap gap-x-3.5 gap-y-1 text-[0.8rem] text-[var(--text-dim)]"
-          >
-            <span>{{ group.doneCount }} done</span>
-            <span>{{ group.failedCount }} failed</span>
-            <span>{{ group.remainingCount }} remaining</span>
-            <span>{{ group.totalJobs }} total</span>
-          </div>
-
-          <div
-            v-if="group.batch"
-            class="mb-3 flex flex-wrap gap-x-3.5 gap-y-1 text-[0.8rem] text-[var(--text-dim)]"
-          >
-            <span>QP {{ group.batch.options.qp }}</span>
-            <span>{{ encoderLabel(group.batch.options.encoder) }}</span>
-            <span>{{ streamLabel(group.batch.options.streamSelection) }}</span>
-            <span>Audio {{ audioLabel(group.batch.options.audioMode) }}</span>
-            <span
-              >Subs {{ subtitleLabel(group.batch.options.subtitleMode) }}</span
+            <div
+              class="mb-3 flex flex-wrap gap-x-3.5 gap-y-1 text-[0.8rem] text-[var(--text-dim)]"
             >
-          </div>
+              <span>{{ group.doneCount }} done</span>
+              <span>{{ group.failedCount }} failed</span>
+              <span>{{ group.remainingCount }} remaining</span>
+              <span>{{ group.totalJobs }} total</span>
+            </div>
 
-          <div v-if="group.batch" class="mb-3 flex flex-wrap gap-2">
-            <button
-              class="rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-[0.78rem] font-bold text-[var(--text)] disabled:opacity-55"
-              type="button"
-              :disabled="batchBusyMap[group.batch.id]"
-              @click="
-                group.batch.paused
-                  ? resumeBatch(group.batch.id)
-                  : pauseBatch(group.batch.id)
-              "
+            <div
+              v-if="group.batch"
+              class="mb-3 flex flex-wrap gap-x-3.5 gap-y-1 text-[0.8rem] text-[var(--text-dim)]"
             >
-              {{
-                batchBusyMap[group.batch.id]
-                  ? "Working..."
-                  : group.batch.paused
-                    ? "Resume Batch"
-                    : "Pause Batch"
-              }}
-            </button>
-            <button
-              class="rounded-full border border-[rgba(242,125,145,0.2)] bg-[rgba(242,125,145,0.08)] px-3.5 py-2 text-[0.78rem] font-bold text-[var(--danger)] disabled:opacity-55"
-              type="button"
-              :disabled="batchBusyMap[group.batch.id] || group.queuedCount < 1"
-              @click="cancelRemaining(group)"
-            >
-              Cancel Remaining
-            </button>
-          </div>
+              <span>QP {{ group.batch.options.qp }}</span>
+              <span>{{ encoderLabel(group.batch.options.encoder) }}</span>
+              <span>{{
+                streamLabel(group.batch.options.streamSelection)
+              }}</span>
+              <span>Audio {{ audioLabel(group.batch.options.audioMode) }}</span>
+              <span
+                >Subs
+                {{ subtitleLabel(group.batch.options.subtitleMode) }}</span
+              >
+            </div>
 
-          <div class="grid gap-3">
-            <JobCard
-              v-for="job in group.jobs"
-              :key="job.id"
-              :job="job"
-              :queued-position="queuedPositions.get(job.id)"
-            />
+            <div v-if="group.batch" class="mb-3 flex flex-wrap gap-2">
+              <button
+                class="rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-[0.78rem] font-bold text-[var(--text)] disabled:opacity-55"
+                type="button"
+                :disabled="batchBusyMap[group.batch.id]"
+                @click="
+                  group.batch.paused
+                    ? resumeBatch(group.batch.id)
+                    : pauseBatch(group.batch.id)
+                "
+              >
+                {{
+                  batchBusyMap[group.batch.id]
+                    ? "Working..."
+                    : group.batch.paused
+                      ? "Resume Batch"
+                      : "Pause Batch"
+                }}
+              </button>
+              <button
+                class="rounded-full border border-[rgba(242,125,145,0.2)] bg-[rgba(242,125,145,0.08)] px-3.5 py-2 text-[0.78rem] font-bold text-[var(--danger)] disabled:opacity-55"
+                type="button"
+                :disabled="
+                  batchBusyMap[group.batch.id] || group.queuedCount < 1
+                "
+                @click="cancelRemaining(group)"
+              >
+                Cancel Remaining
+              </button>
+            </div>
+
+            <div class="grid gap-3">
+              <JobCard
+                v-for="job in group.jobs"
+                :key="job.id"
+                :job="job"
+                :queued-position="queuedPositions.get(job.id)"
+              />
+            </div>
           </div>
         </article>
       </div>
@@ -435,6 +562,47 @@ async function cancelRemaining(group: BatchGroup): Promise<void> {
       class="rounded-[22px] border border-dashed border-[rgba(109,212,236,0.16)] bg-white/[0.025] px-4 py-10 text-center text-[var(--text-muted)]"
     >
       No queued or running jobs right now.
+    </div>
+
+    <div
+      v-if="confirmModalOpen"
+      class="absolute inset-0 z-30 flex items-center justify-center rounded-[28px] bg-black/50 p-4 backdrop-blur-[3px]"
+      @click.self="confirmModalCancel"
+    >
+      <section
+        class="w-[min(520px,100%)] rounded-[20px] border border-white/12 bg-[var(--glass-strong)] p-5 shadow-[var(--shadow-deep)]"
+      >
+        <p
+          class="mb-2 inline-flex items-center gap-2 rounded-full border border-[rgba(242,125,145,0.26)] bg-[rgba(242,125,145,0.14)] px-3 py-1 text-[0.68rem] font-extrabold uppercase tracking-[0.14em] text-[var(--danger)]"
+        >
+          Confirmation Required
+        </p>
+        <h4 class="m-0 text-[1.02rem] font-extrabold tracking-[-0.02em]">
+          {{ confirmModalTitle }}
+        </h4>
+        <p
+          class="mb-0 mt-2 text-[0.9rem] leading-relaxed text-[var(--text-muted)]"
+        >
+          {{ confirmModalText }}
+        </p>
+
+        <div class="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            class="rounded-full border border-white/12 bg-white/[0.05] px-3.5 py-2 text-[0.78rem] font-bold text-[var(--text)]"
+            @click="confirmModalCancel"
+          >
+            Keep Jobs
+          </button>
+          <button
+            type="button"
+            class="rounded-full border border-[rgba(242,125,145,0.3)] bg-[rgba(242,125,145,0.14)] px-3.5 py-2 text-[0.78rem] font-bold text-[var(--danger)]"
+            @click="confirmModalAccept"
+          >
+            {{ confirmModalConfirmLabel }}
+          </button>
+        </div>
+      </section>
     </div>
   </div>
 </template>

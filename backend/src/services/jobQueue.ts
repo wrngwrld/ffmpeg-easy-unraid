@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { EventEmitter } from "node:events";
-import { EXPORT_DIR, MEDIA_DIR } from "../config.js";
+import fs from "node:fs";
+import { CONFIG_DIR, EXPORT_DIR, MEDIA_DIR, QUEUE_FILE } from "../config.js";
 import { readSettings } from "./settings.js";
 import {
   spawnTranscode,
@@ -59,6 +60,143 @@ let parallelJobs = readSettings().parallelJobs;
 const cancelHandles = new Map<string, () => void>();
 const runtimeHandles = new Map<string, ReturnType<typeof spawnTranscode>>();
 const pausedBatchIds = new Set<string>();
+let isInitialized = false;
+
+interface QueuePayload {
+  version: number;
+  updatedAt: string;
+  items: Job[];
+}
+
+function readRawQueue(): QueuePayload {
+  try {
+    const raw = fs.readFileSync(QUEUE_FILE, "utf8");
+    const parsed = JSON.parse(raw) as Partial<QueuePayload>;
+    return {
+      version: 1,
+      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
+      items: Array.isArray(parsed.items) ? parsed.items : [],
+    };
+  } catch {
+    return {
+      version: 1,
+      updatedAt: "",
+      items: [],
+    };
+  }
+}
+
+function writeRawQueue(payload: QueuePayload): void {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  const tmp = QUEUE_FILE + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf8");
+  fs.renameSync(tmp, QUEUE_FILE);
+}
+
+function persistQueue(): void {
+  writeRawQueue({
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    items: [...jobs.values()],
+  });
+}
+
+function normalizeRecoveredJob(job: Partial<Job>): Job | null {
+  if (
+    typeof job.id !== "string" ||
+    typeof job.batchId !== "string" ||
+    typeof job.sourcePath !== "string" ||
+    typeof job.outputPath !== "string" ||
+    typeof job.qp !== "number" ||
+    (job.encoder !== "vaapi" &&
+      job.encoder !== "videotoolbox" &&
+      job.encoder !== "software") ||
+    (job.streamSelection !== "all" && job.streamSelection !== "primary") ||
+    (job.audioMode !== "copy" && job.audioMode !== "aac") ||
+    (job.subtitleMode !== "copy" && job.subtitleMode !== "drop") ||
+    typeof job.createdAt !== "string"
+  ) {
+    return null;
+  }
+
+  const recoveredState: JobState =
+    job.state === "queued" || job.state === "running"
+      ? "queued"
+      : job.state === "done" ||
+          job.state === "failed" ||
+          job.state === "cancelled"
+        ? job.state
+        : "failed";
+
+  return {
+    id: job.id,
+    batchId: job.batchId,
+    sourcePath: job.sourcePath,
+    outputPath: job.outputPath,
+    createdAt: job.createdAt,
+    qp: Math.max(0, Math.min(51, Math.floor(job.qp))),
+    encoder: job.encoder,
+    streamSelection: job.streamSelection,
+    streamMap: job.streamMap,
+    audioMode: job.audioMode,
+    subtitleMode: job.subtitleMode,
+    state: recoveredState,
+    pct:
+      recoveredState === "done"
+        ? 100
+        : typeof job.pct === "number"
+          ? Math.max(0, Math.min(100, job.pct))
+          : 0,
+    speed: recoveredState === "queued" ? "n/a" : (job.speed ?? "n/a"),
+    elapsed:
+      recoveredState === "queued"
+        ? 0
+        : typeof job.elapsed === "number" && Number.isFinite(job.elapsed)
+          ? Math.max(0, job.elapsed)
+          : 0,
+    startedAt:
+      recoveredState === "queued"
+        ? null
+        : typeof job.startedAt === "string"
+          ? job.startedAt
+          : null,
+    finishedAt:
+      recoveredState === "done" ||
+      recoveredState === "failed" ||
+      recoveredState === "cancelled"
+        ? typeof job.finishedAt === "string"
+          ? job.finishedAt
+          : null
+        : null,
+    error: typeof job.error === "string" ? job.error : null,
+    inputBytes: typeof job.inputBytes === "number" ? job.inputBytes : null,
+    outputBytes: typeof job.outputBytes === "number" ? job.outputBytes : null,
+    savedBytes: typeof job.savedBytes === "number" ? job.savedBytes : null,
+    savedPercent:
+      typeof job.savedPercent === "number" ? job.savedPercent : null,
+  };
+}
+
+export function initializeJobQueue(pausedBatchIdsToLoad: string[] = []): void {
+  if (isInitialized) return;
+
+  const payload = readRawQueue();
+  for (const rawJob of payload.items) {
+    const recovered = normalizeRecoveredJob(rawJob);
+    if (!recovered) continue;
+    jobs.set(recovered.id, recovered);
+  }
+
+  pausedBatchIds.clear();
+  for (const batchId of pausedBatchIdsToLoad) {
+    pausedBatchIds.add(batchId);
+  }
+
+  runningCount = 0;
+  isInitialized = true;
+  persistQueue();
+  void drain();
+}
 
 export function getParallelJobs(): number {
   return parallelJobs;
@@ -100,6 +238,7 @@ export function setBatchPausedInQueue(batchId: string, paused: boolean): void {
       runtimeHandles.get(job.id)?.resume();
     }
   }
+  persistQueue();
   void drain();
 }
 
@@ -113,6 +252,7 @@ export function cancelRemainingByBatch(batchId: string): number {
     cancelled += 1;
   }
   if (cancelled > 0) {
+    persistQueue();
     void drain();
   }
   return cancelled;
@@ -166,6 +306,7 @@ export function addJob(
   };
 
   jobs.set(job.id, job);
+  persistQueue();
   queueEvents.emit("event", { type: "job-added", job: snapshot(job) });
   void drain();
   return job;
@@ -177,6 +318,7 @@ export function cancelJob(id: string): boolean {
 
   if (job.state === "queued") {
     job.state = "cancelled";
+    persistQueue();
     queueEvents.emit("event", { type: "job-cancelled", job: snapshot(job) });
     return true;
   }
@@ -210,6 +352,7 @@ async function drain(): Promise<void> {
 async function runJob(job: Job): Promise<void> {
   job.state = "running";
   job.startedAt = new Date().toISOString();
+  persistQueue();
   queueEvents.emit("event", { type: "job-progress", job: snapshot(job) });
 
   const sourceAbs = path.join(MEDIA_DIR, job.sourcePath);
@@ -253,12 +396,15 @@ async function runJob(job: Job): Promise<void> {
     cancelHandles.set(job.id, () => {
       cancelled = true;
       job.state = "cancelled";
+      job.finishedAt = new Date().toISOString();
+      persistQueue();
       handle.kill();
     });
 
     await handle.done;
 
     if (cancelled) {
+      persistQueue();
       queueEvents.emit("event", { type: "job-cancelled", job: snapshot(job) });
       return;
     }
@@ -278,6 +424,7 @@ async function runJob(job: Job): Promise<void> {
     job.savedBytes = inputBytes - outputBytes;
     job.savedPercent =
       inputBytes > 0 ? ((inputBytes - outputBytes) / inputBytes) * 100 : 0;
+    persistQueue();
 
     recordEntry({
       timestamp: job.finishedAt,
@@ -313,6 +460,7 @@ async function runJob(job: Job): Promise<void> {
     queueEvents.emit("event", { type: "job-done", job: snapshot(job) });
   } catch (err) {
     if (cancelled) {
+      persistQueue();
       queueEvents.emit("event", { type: "job-cancelled", job: snapshot(job) });
       return;
     }
@@ -320,6 +468,7 @@ async function runJob(job: Job): Promise<void> {
     job.state = "failed";
     job.finishedAt = new Date().toISOString();
     job.error = err instanceof Error ? err.message : String(err);
+    persistQueue();
 
     recordEntry({
       timestamp: job.finishedAt,

@@ -22,6 +22,12 @@ const infoMsg = ref<string | null>(null);
 const rowBusy = ref<Record<string, boolean>>({});
 const comparing = ref<{ sourcePath: string; outputPath: string } | null>(null);
 const selectedBatchFilter = ref<string>("all");
+const confirmModalOpen = ref(false);
+const confirmModalTitle = ref("");
+const confirmModalText = ref("");
+const confirmModalConfirmLabel = ref("Confirm");
+const confirmModalDanger = ref(false);
+let confirmModalResolver: ((answer: boolean) => void) | null = null;
 
 const pendingCount = computed(() => approvals.value.length);
 const batchFilterOptions = computed(() => {
@@ -69,6 +75,43 @@ function encoderLabel(enc: ApprovalItem["encoder"]): string {
       : "Software";
 }
 
+async function askForConfirmation(input: {
+  title: string;
+  text: string;
+  confirmLabel: string;
+  danger?: boolean;
+}): Promise<boolean> {
+  confirmModalTitle.value = input.title;
+  confirmModalText.value = input.text;
+  confirmModalConfirmLabel.value = input.confirmLabel;
+  confirmModalDanger.value = input.danger === true;
+  confirmModalOpen.value = true;
+
+  return new Promise<boolean>((resolve) => {
+    confirmModalResolver = resolve;
+  });
+}
+
+function confirmModalAccept(): void {
+  confirmModalOpen.value = false;
+  confirmModalTitle.value = "";
+  confirmModalText.value = "";
+  confirmModalConfirmLabel.value = "Confirm";
+  confirmModalDanger.value = false;
+  confirmModalResolver?.(true);
+  confirmModalResolver = null;
+}
+
+function confirmModalCancel(): void {
+  confirmModalOpen.value = false;
+  confirmModalTitle.value = "";
+  confirmModalText.value = "";
+  confirmModalConfirmLabel.value = "Confirm";
+  confirmModalDanger.value = false;
+  confirmModalResolver?.(false);
+  confirmModalResolver = null;
+}
+
 async function loadApprovals(): Promise<void> {
   loading.value = true;
   errorMsg.value = null;
@@ -85,12 +128,13 @@ async function loadApprovals(): Promise<void> {
 }
 
 async function replaceOne(item: ApprovalItem): Promise<void> {
-  if (typeof window !== "undefined") {
-    const ok = window.confirm(
-      `Replace source file for \"${item.sourcePath}\" with its transcoded output? This cannot be undone.`,
-    );
-    if (!ok) return;
-  }
+  const ok = await askForConfirmation({
+    title: "Approve And Replace",
+    text: `Replace source file for \"${item.sourcePath}\" with its transcoded output? This cannot be undone.`,
+    confirmLabel: "Approve And Replace",
+    danger: true,
+  });
+  if (!ok) return;
 
   rowBusy.value[item.id] = true;
   errorMsg.value = null;
@@ -113,12 +157,13 @@ async function replaceOne(item: ApprovalItem): Promise<void> {
 }
 
 async function dismissOne(item: ApprovalItem): Promise<void> {
-  if (typeof window !== "undefined") {
-    const ok = window.confirm(
-      `Dismiss approval for \"${item.sourcePath}\"? The transcoded file will remain in export until manually handled.`,
-    );
-    if (!ok) return;
-  }
+  const ok = await askForConfirmation({
+    title: "Dismiss Approval",
+    text: `Dismiss approval for \"${item.sourcePath}\"? The transcoded file will remain in export until manually handled.`,
+    confirmLabel: "Dismiss",
+    danger: true,
+  });
+  if (!ok) return;
 
   rowBusy.value[item.id] = true;
   errorMsg.value = null;
@@ -139,12 +184,13 @@ async function dismissOne(item: ApprovalItem): Promise<void> {
 }
 
 async function replaceAll(): Promise<void> {
-  if (typeof window !== "undefined") {
-    const ok = window.confirm(
-      `Replace source files for all ${approvals.value.length} pending approval item${approvals.value.length === 1 ? "" : "s"}? This cannot be undone.`,
-    );
-    if (!ok) return;
-  }
+  const ok = await askForConfirmation({
+    title: "Replace All Pending",
+    text: `Replace source files for all ${approvals.value.length} pending approval item${approvals.value.length === 1 ? "" : "s"}? This cannot be undone.`,
+    confirmLabel: "Replace All",
+    danger: true,
+  });
+  if (!ok) return;
 
   replacingAll.value = true;
   errorMsg.value = null;
@@ -347,4 +393,55 @@ onMounted(loadApprovals);
     :output-path="comparing.outputPath"
     @close="comparing = null"
   />
+
+  <div
+    v-if="confirmModalOpen"
+    class="fixed inset-0 z-[260] flex items-center justify-center bg-black/60 p-4 backdrop-blur-[4px]"
+    @click.self="confirmModalCancel"
+  >
+    <section
+      class="w-[min(540px,100%)] rounded-[22px] border border-white/12 bg-[var(--glass-strong)] p-6 shadow-[var(--shadow-deep)]"
+    >
+      <p
+        class="mb-2 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[0.68rem] font-extrabold uppercase tracking-[0.14em]"
+        :class="
+          confirmModalDanger
+            ? 'border-[rgba(242,125,145,0.26)] bg-[rgba(242,125,145,0.14)] text-[var(--danger)]'
+            : 'border-[rgba(109,212,236,0.22)] bg-[rgba(109,212,236,0.1)] text-[var(--accent)]'
+        "
+      >
+        Confirmation Required
+      </p>
+      <h4 class="m-0 text-[1.05rem] font-extrabold tracking-[-0.02em]">
+        {{ confirmModalTitle }}
+      </h4>
+      <p
+        class="mb-0 mt-2 text-[0.92rem] leading-relaxed text-[var(--text-muted)]"
+      >
+        {{ confirmModalText }}
+      </p>
+
+      <div class="mt-4 flex justify-end gap-2">
+        <button
+          type="button"
+          class="rounded-full border border-white/12 bg-white/[0.05] px-4 py-2 text-[0.8rem] font-bold text-[var(--text)]"
+          @click="confirmModalCancel"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          class="rounded-full border px-4 py-2 text-[0.8rem] font-bold"
+          :class="
+            confirmModalDanger
+              ? 'border-[rgba(242,125,145,0.3)] bg-[rgba(242,125,145,0.14)] text-[var(--danger)]'
+              : 'border-[rgba(109,212,236,0.35)] bg-[rgba(109,212,236,0.13)] text-[var(--text)]'
+          "
+          @click="confirmModalAccept"
+        >
+          {{ confirmModalConfirmLabel }}
+        </button>
+      </div>
+    </section>
+  </div>
 </template>

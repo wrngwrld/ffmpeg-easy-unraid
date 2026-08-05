@@ -7,6 +7,7 @@ import {
   cancelJob,
   getJobs,
   getParallelJobs,
+  initializeJobQueue,
   queueEvents,
   setBatchPausedInQueue,
 } from "../services/jobQueue.js";
@@ -230,7 +231,12 @@ function collectMediaFiles(absFolder: string): string[] {
 }
 
 const transcodeRoute: FastifyPluginAsync = async (fastify) => {
-  for (const batch of listBatches()) {
+  const startupBatches = listBatches();
+  initializeJobQueue(
+    startupBatches.filter((batch) => batch.paused).map((batch) => batch.id),
+  );
+
+  for (const batch of startupBatches) {
     if (batch.paused) {
       setBatchPausedInQueue(batch.id, true);
     }
