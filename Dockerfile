@@ -1,62 +1,62 @@
 # ==============================================================================
-# Dockerfile: FFmpeg-Easy-Unraid
-# Project:    Simple H265 and AV1 Batch Transcoder
-# Author:     metronade
-# Base:       Ubuntu 24.04 (Includes FFmpeg 6.1 native)
+# Stage 1 — Build (TypeScript backend + Vite frontend)
 # ==============================================================================
+FROM node:20-slim AS builder
 
+WORKDIR /build
+
+RUN corepack enable && corepack prepare yarn@4.18.0 --activate
+
+COPY backend/package.json backend/yarn.lock* backend/.yarnrc.yml* ./backend/
+RUN cd backend && yarn install --immutable
+
+COPY frontend/package.json frontend/yarn.lock* frontend/.yarnrc.yml* ./frontend/
+RUN cd frontend && yarn install --immutable
+
+COPY backend/ ./backend/
+RUN cd backend && yarn build
+
+COPY frontend/ ./frontend/
+RUN cd frontend && yarn build
+
+# ==============================================================================
+# Stage 2 — Runtime (Ubuntu 24.04 + FFmpeg + Node 20)
+# ==============================================================================
 FROM ubuntu:24.04
 
-# Metadata
 LABEL maintainer="metronade"
-LABEL description="Simple H265 and AV1 Batch Transcoder"
+LABEL description="Transcode Harbor v2 — TypeScript + Vue 3"
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# --- CONFIG DEFAULTS ---
-ENV ENCODE_METHOD=intel_h265
-ENV ENCODE_QP=22
-ENV ADMIN_PORT=8080
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      ffmpeg libva-drm2 libva-x11-2 vainfo pciutils curl ca-certificates && \
+    if ! apt-get install -y --no-install-recommends intel-media-va-driver-non-free 2>/dev/null; then \
+      apt-get install -y --no-install-recommends intel-media-va-driver 2>/dev/null || true; \
+    fi && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Custom Arguments
-ENV FFMPEG_CUSTOM_ARGS=""
-
-# Unraid Permissions
-ENV UNRAID_UID=99
-ENV UNRAID_GID=100
-
-# --- NVIDIA RUNTIME SUPPORT ---
-# These variables tell the Nvidia Container Runtime to inject libraries automatically
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
 
-# 1. Install Dependencies & FFmpeg & Drivers
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    ffmpeg \
-    python3 \
-    libva-drm2 \
-    libva-x11-2 \
-    vainfo \
-    pciutils \
-    inotify-tools \
-    bc \
-    curl \
-    wget && \
-    if ! apt-get install -y --no-install-recommends intel-media-va-driver; then echo "[WARN] intel-media-va-driver unavailable on this architecture; skipping"; fi && \
-    if ! apt-get install -y --no-install-recommends i965-va-driver; then echo "[WARN] i965-va-driver unavailable on this architecture; skipping"; fi && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+WORKDIR /opt/transcode-harbor
 
-# Root directories for simplified access
-WORKDIR /
+COPY --from=builder /build/backend/dist         ./backend/dist
+COPY --from=builder /build/backend/node_modules ./backend/node_modules
+COPY --from=builder /build/frontend/dist        ./web
 
-COPY admin_server.py /opt/ffmpeg-easy/admin_server.py
-COPY web /opt/ffmpeg-easy/web
-COPY start.sh /usr/local/bin/start.sh
-COPY transcode.sh /usr/local/bin/transcode.sh
-RUN chmod +x /usr/local/bin/transcode.sh /usr/local/bin/start.sh
+ENV STATIC_ROOT=/opt/transcode-harbor/web
+ENV MEDIA_DIR=/media
+ENV EXPORT_DIR=/export
+ENV CONFIG_DIR=/config
+ENV ADMIN_PORT=8080
+ENV PARALLEL_JOBS=1
+ENV UNRAID_UID=99
+ENV UNRAID_GID=100
+ENV NODE_ENV=production
 
 EXPOSE 8080
-
-ENTRYPOINT ["/usr/local/bin/start.sh"]
+ENTRYPOINT ["node", "backend/dist/index.js"]

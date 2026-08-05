@@ -1,0 +1,100 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --accent: #6dd4ec;
+  --accent-dim: #4ab8d4;
+  --accent-two: #a78bfa;
+  --bg: #08090d;
+  --glass: rgba(20, 21, 32, 0.66);
+  --glass-strong: rgba(17, 19, 28, 0.84);
+  --border: rgba(109, 212, 236, 0.16);
+  --border-soft: rgba(255, 255, 255, 0.07);
+  --text: #e8eaf0;
+  --text-muted: #8a8fa8;
+  --text-dim: #5a5f76;
+  --success: #7adf9a;
+  --warn: #f0bf6b;
+  --danger: #f27d91;
+  --radius-sm: 12px;
+  --radius: 18px;
+  --radius-lg: 28px;
+  --shadow-glow: 0 0 60px rgba(109, 212, 236, 0.12);
+  --shadow-deep: 0 30px 80px rgba(0, 0, 0, 0.45);
+  --bar: linear-gradient(90deg, var(--accent) 0%, var(--accent-two) 100%);
+  --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  overflow-x: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", sans-serif;
+  line-height: 1.6;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  pointer-events: none;
+  opacity: 0.35;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--border);
+}
+
+@keyframes orbFloatOne {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+
+  33% {
+    transform: translate(60px, -40px) scale(1.08);
+  }
+
+  66% {
+    transform: translate(-30px, 30px) scale(0.92);
+  }
+}
+
+@keyframes orbFloatTwo {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+
+  33% {
+    transform: translate(-45px, 24px) scale(1.12);
+  }
+
+  66% {
+    transform: translate(35px, -18px) scale(0.88);
+  }
+}

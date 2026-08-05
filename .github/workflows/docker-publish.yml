@@ -25,5 +25,5 @@ jobs:
           context: .
           push: true
           tags: |
-            wrngwrld/ffmpeg-easy-unraid:latest
-            wrngwrld/ffmpeg-easy-unraid:${{ github.sha }}
+            wrngwrld/transcode-harbor:latest
+            wrngwrld/transcode-harbor:${{ github.sha }}

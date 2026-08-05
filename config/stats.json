@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "updatedAt": "2026-08-05T11:04:10.202Z",
+  "totals": {
+    "processed": 1,
+    "succeeded": 1,
+    "failed": 0,
+    "inputBytes": 948334622,
+    "outputBytes": 579130716,
+    "savedBytes": 369203906,
+    "avgSavedPercent": 38.93181767648255
+  },
+  "recentFiles": [
+    {
+      "timestamp": "2026-08-05T11:04:10.202Z",
+      "relativePath": "/PLL/Pretty Little Liars (2010) - S01E01 - Pilot [German DL WEBRip-1080p][AC3 2.0][x265]-FuN.mkv",
+      "status": "succeeded",
+      "method": "videotoolbox_h265",
+      "qp": 28,
+      "inputBytes": 948334622,
+      "outputBytes": 579130716,
+      "savedBytes": 369203906,
+      "savedPercent": 38.93181767648255
+    }
+  ]
+}

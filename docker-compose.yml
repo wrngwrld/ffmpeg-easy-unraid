@@ -1,47 +1,32 @@
 services:
-  ffmpeg-easy:
-    container_name: ffmpeg-easy-unraid
+  transcode-harbor:
+    container_name: transcode-harbor
     build:
       context: .
       dockerfile: Dockerfile
 
-    # IMPORTANT: Set to "no" because this container stops after processing
-    # the queue ("Run-Once" workflow).
-    # Use "always" only if you want it to restart immediately after finishing (not recommended).
-    restart: "no"
+    restart: always
 
-    # IMPORTANT: Required to suppress warnings and allow process prioritization
     cap_add:
       - SYS_NICE
 
     environment:
-      # --- Configuration ---
-      - ENCODE_METHOD=intel_h265 # Only supported encoder method
-      - ENCODE_PARALLEL_JOBS=1 # Number of files processed in parallel
-      - ENCODE_WATCH_MODE=0 # 0 = Run-Once, 1 = Watch folder continuously
-      - ENCODE_WATCH_POLL_SECONDS=30 # Poll fallback interval if inotify is unavailable
-      - ENCODE_FILE_STABLE_SECONDS=5 # Wait for unchanged file size before encoding
-      - ENCODE_LIVE_PREVIEW=1 # Show live ffmpeg progress in container logs
-      - ENCODE_PROGRESS_INTERVAL=2 # Progress update interval in seconds
-      - ENCODE_HEARTBEAT_SECONDS=10 # Guaranteed per-job heartbeat interval
-      - ENCODE_QP=22 # Intel H265 quality control (lower=better quality)
-      - FFMPEG_CUSTOM_ARGS= # E.g. "-c:a aac" for audio conversion
-
-      # --- Permissions ---
-      # Standard Linux users are often 1000:1000.
-      # On Unraid, it is usually 99:100. Adjust this to match your host file owner!
+      - MEDIA_DIR=/media
+      - EXPORT_DIR=/export
+      - CONFIG_DIR=/config
+      - PARALLEL_JOBS=1
+      - ADMIN_PORT=8080
       - UNRAID_UID=1000
       - UNRAID_GID=1000
 
     volumes:
-      # Adjust the paths on the left side to match your host directories
-      - ./import:/import
+      - ./media:/media:ro # mount your whole media library read-only
       - ./export:/export
+      - ./config:/config
 
     ports:
-      - "8080:8080" # Admin page
+      - "8080:8080"
 
-
-    # --- HARDWARE: INTEL (Uncomment for QuickSync/Arc support) ---
+    # --- Intel QuickSync / Arc (uncomment to enable VAAPI) ---
     # devices:
     #   - /dev/dri:/dev/dri

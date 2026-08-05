@@ -1,0 +1,14 @@
+{
+  "name": "transcode-harbor",
+  "version": "2.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:hot": "BACKEND_WATCH=1 node scripts/dev.mjs",
+    "dev:backend": "yarn --cwd backend dev",
+    "dev:backend:watch": "yarn --cwd backend dev:watch",
+    "dev:frontend": "yarn --cwd frontend dev",
+    "build": "yarn --cwd backend build && yarn --cwd frontend build"
+  },
+  "packageManager": "yarn@4.18.0"
+}

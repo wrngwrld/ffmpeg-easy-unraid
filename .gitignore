@@ -14,6 +14,7 @@
 /import/
 /export/
 /finished/
+/media/
 
 # Sample media folders
 /sample/
@@ -26,6 +27,18 @@
 *.tmp
 *.temp
 
+# Browser preview cache generated from /api/stream/preview/*
+/config/preview-cache/
+
 # Editor/runtime caches
 .vscode/
 *.swp
+
+
+
+
+
+dist
+node_modules
+.yarn/*
+build

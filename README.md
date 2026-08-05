@@ -1,216 +1,250 @@
-# FFmpeg-Easy-Unraid
+# Transcode Harbor
 
 <div align="center">
-  <img src="./icon.png" width="150" height="150">
+  <img src="./icon.png" width="150" height="150" alt="Transcode Harbor logo">
 </div>
 
-**A "Set and Forget" Batch Transcoder designed for Unraid.** Convert your media library (Movies, TV Series) to space-saving H.265/HEVC with Intel QuickSync.
+Transcode Harbor is a Docker-first media transcoding app for Unraid and homelab setups.
+It provides a Vue 3 web UI to browse your library, queue jobs, monitor progress in real time, compare source vs output, and store historical savings data.
 
----
+## What It Is
 
-## 📖 About The Project
+This repository contains a full-stack app:
 
-**FFmpeg-Easy-Unraid** is a Docker container built to simplify the process of shrinking large video libraries. It automatically scans an input directory, converts video files to highly efficient formats, and moves the original files to a "finished" folder upon success.
+- Backend: Fastify + TypeScript API that controls FFmpeg
+- Frontend: Vue 3 + TypeScript + Tailwind dashboard
+- Runtime: Docker image with FFmpeg, Node.js, and optional hardware acceleration
 
-It is designed to be robust ("fail-safe") and focused on Intel QuickSync H.265 for a simple, stable workflow.
+Important: this is queue-driven and UI-driven. It does not auto-scan folders on startup and does not move originals to a finished folder.
 
-### Key Features
+## Core Features
 
-- **Run-Once Workflow:** This container is designed to run on demand. It scans the `/import` directory on startup, processes the queue, and **stops automatically** when finished. It does not continuously monitor the folder to save resources. **To process a new batch, simply restart the container.**
-- **Focused Codec Path:** Encodes to **H.265 (HEVC)**.
-- **Hardware Acceleration:** Optimized for **Intel QuickSync/Arc** (`intel_h265`).
-- **Smart Workflow:**
-  - Scans `/import` for media.
-  - Transcodes to `/export`.
-  - Moves successfully processed originals to `/import/finished`.
-  - **Directory Preservation:** Perfect for TV Shows! Recursively scans folders and recreates the exact directory structure (e.g., `Series Name/Season 1/`) in the output.
-- **Safety First:** Intel QuickSync path with optional file-stability checks to avoid processing partial copies.
-- **Detailed Stats:** Displays exact space savings (GB/MB and %) after every run.
-- **Container Standardization:** Automatically outputs to **.MKV** for maximum compatibility with subtitles and audio tracks.
-- **Optional Watch Mode:** Can run continuously and auto-start a new transcode batch when new files appear in `/import`.
-- **Admin Console:** A built-in web dashboard shows queue depth, current jobs, and runtime state at `http://<host>:8080`.
+- Interactive media browser rooted at `/media`
+- Queue-based workflow with cancel support
+- Queue one file or queue an entire folder recursively
+- Parallel workers (`PARALLEL_JOBS`)
+- Hardware probing with fallback:
+  - Linux: VAAPI (`hevc_vaapi`)
+  - macOS: VideoToolbox (`hevc_videotoolbox`)
+  - Fallback: software (`libx265`)
+- H.265 output in MKV container
+- Audio/subtitle stream copy (`-c:a copy -c:s copy`)
+- Real-time progress updates via Server-Sent Events (SSE)
+- History and aggregate savings persisted in `/config/stats.json`
+- Source/output preview streaming for side-by-side comparison
 
----
+## Supported Media Inputs
 
-## 🟢 Intel QuickSync Setup (Required)
+- `.mkv`
+- `.mp4`
+- `.ts`
+- `.m2ts`
+- `.avi`
+- `.mov`
+- `.wmv`
 
-This project now supports only `intel_h265`.
+## Quick Start (Docker Compose)
 
-When adding or editing this container in Unraid:
+1. Edit [docker-compose.yml](docker-compose.yml) to match your paths.
+2. Start the stack:
 
-1. Enable device mapping for Intel graphics by passing `/dev/dri` into the container.
-2. Apply changes and start the container.
+```bash
+docker compose up --build -d
+```
 
-On startup, the container runs a QuickSync hardware check. If successful, encoding starts automatically.
-
----
-
-## ⚙️ Prerequisites
-
-### 1. For Intel GPU Encoding (QuickSync / Arc)
-
-- **Device Mapping:** You must pass the device `/dev/dri` to the container.
-
----
-
-## 🚀 Configuration & Environment Variables
-
-## Admin Page
-
-The container now serves a lightweight admin page on port `8080`.
-
-Open it in your browser:
+3. Open the UI:
 
 ```text
-http://<your-unraid-ip>:8080
+http://localhost:8080
 ```
 
-It shows:
+Current compose defaults:
 
-- queue size from `/import`
-- active encode workers and progress
-- current batch/watch state
-- key runtime settings like QP and parallel jobs
+- `/media` mounted read-only (source library)
+- `/export` mounted read-write (transcode outputs)
+- `/config` mounted read-write (history state)
 
-The container is controlled via Environment Variables.
+## Hardware Acceleration Notes
 
-### A Note on Defaults
+On Linux/Unraid, enable Intel QuickSync/Arc by passing through `/dev/dri`:
 
-> **Why these default values?**
-> The defaults are tuned for stable Intel QuickSync H.265 operation with good visual quality and meaningful size savings.
-
-### Variable List
-
-| Variable                     | Default      | Description                                                                                                                                                                                  |
-| :--------------------------- | :----------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ENCODE_METHOD`              | `intel_h265` | **Encoder Engine.**<br>Only `intel_h265` is supported. Other values are forced to `intel_h265` with a warning.                                                                               |
-| `ENCODE_PARALLEL_JOBS`       | `1`          | **Files in Parallel.**<br>How many files to transcode at the same time.<br>`1` = sequential (default).<br>Recommended: `2` for most systems, optionally `3` if stable.                       |
-| `ENCODE_WATCH_MODE`          | `0`          | **Continuous Folder Watch.**<br>`0` = Run once and stop.<br>`1` = Keep container running and automatically process new files when they are copied into `/import`.                            |
-| `ENCODE_WATCH_POLL_SECONDS`  | `30`         | **Watch Fallback Interval.**<br>Used only if inotify is unavailable inside the container.<br>Minimum valid value: `5`.                                                                       |
-| `ENCODE_FILE_STABLE_SECONDS` | `5`          | **Copy Safety Gate.**<br>Before encoding starts, file size must remain unchanged for this many seconds.<br>Set `0` to disable the stability wait.                                            |
-| `ENCODE_LIVE_PREVIEW`        | `1`          | **Live Encode Progress in Logs.**<br>`1` = show ongoing ffmpeg progress output while encoding.<br>`0` = quieter logs.                                                                        |
-| `ENCODE_PROGRESS_INTERVAL`   | `2`          | **Progress Update Interval (seconds).**<br>How often live progress is emitted when live preview is enabled.<br>Minimum valid value: `1`.                                                     |
-| `ENCODE_HEARTBEAT_SECONDS`   | `10`         | **Live Heartbeat Interval (seconds).**<br>Emits periodic runtime/output-size updates per active encode job to guarantee visible progress even when ffmpeg progress is sparse.                |
-| `ENCODE_QP`                  | `22`         | **Intel H.265 Quality Control.**<br>Lower = better quality/larger files, higher = smaller files/lower quality.                                                                               |
-| `ENCODE_MAP_ARGS`            | `-map 0`     | **Stream Selection.**<br>Default maps all streams (video, all audio tracks, subtitles, attachments).<br>Example for smaller files: `-map 0:v:0 -map 0:a:0` (first video + first audio only). |
-| `FFMPEG_CUSTOM_ARGS`         | _(Empty)_    | **Audio/Subtitles Override.**<br>Default behavior is `-c:a copy -c:s copy`.<br>Use this to convert audio, e.g., `-c:a aac -b:a 192k`.                                                        |
-| `UNRAID_UID`                 | `99`         | User ID for file permissions (Standard Unraid: 99).                                                                                                                                          |
-| `UNRAID_GID`                 | `100`        | Group ID for file permissions (Standard Unraid: 100).                                                                                                                                        |
-
-### HandBrake-Like Smaller File Setup
-
-If your HandBrake preset creates significantly smaller files, the biggest reason is often **track selection and audio conversion** (not only video quality).
-
-Try this configuration:
-
-```text
-ENCODE_MAP_ARGS=-map 0:v:0 -map 0:a:0
-FFMPEG_CUSTOM_ARGS=-c:a aac -b:a 160k -ac 2 -sn
+```yaml
+devices:
+  - /dev/dri:/dev/dri
 ```
 
-Optional parallelism (for speed):
+On startup, the backend probes available hardware encoders. If none are available, jobs still run with `libx265`.
 
-```text
-ENCODE_PARALLEL_JOBS=2
+## Environment Variables
+
+| Variable        | Default                                  | Description                                                         |
+| --------------- | ---------------------------------------- | ------------------------------------------------------------------- |
+| `MEDIA_DIR`     | `/media`                                 | Root input directory exposed in the browser/API.                    |
+| `EXPORT_DIR`    | `/export`                                | Output root for transcoded files.                                   |
+| `CONFIG_DIR`    | `/config`                                | Persistent app state (history stats).                               |
+| `ADMIN_PORT`    | `8080`                                   | HTTP port used by backend and served frontend.                      |
+| `PARALLEL_JOBS` | `1`                                      | Max concurrent transcode jobs. Minimum is 1.                        |
+| `STATIC_ROOT`   | auto                                     | Frontend assets path. In Docker: `/opt/transcode-harbor/web`.       |
+| `UNRAID_UID`    | `99` (image) / `1000` (compose example)  | Reserved for compatibility; currently not enforced by runtime code. |
+| `UNRAID_GID`    | `100` (image) / `1000` (compose example) | Reserved for compatibility; currently not enforced by runtime code. |
+
+## API Overview
+
+- `GET /api/fs?path=/...` list folders/files from media root
+- `POST /api/transcode` queue one file
+- `POST /api/transcode/folder` queue all supported files in a folder recursively
+- `GET /api/jobs` list queue and hardware encoder state
+- `DELETE /api/jobs/:id` cancel queued/running job
+- `GET /api/events` SSE stream for live status/progress
+- `GET /api/history` read recent entries + totals
+- `GET /api/stream/source?path=...` byte-range stream from media
+- `GET /api/stream/output?path=...` byte-range stream from export
+
+## Transcode Behavior
+
+- Output path mirrors source relative path with `.mkv` extension.
+- Encoder behavior:
+  - VAAPI path: `hevc_vaapi`
+  - VideoToolbox path: `hevc_videotoolbox`
+  - Software path: `libx265`
+- Default mapping keeps all streams: `-map 0`
+- Audio and subtitles are copied by default.
+
+## Local Development
+
+Requirements:
+
+- Node.js 20+
+- FFmpeg and ffprobe on your PATH
+- Yarn 4.18+ (recommended)
+
+Install dependencies (recommended):
+
+```bash
+cd backend && yarn install
+cd ../frontend && yarn install
 ```
 
-Automatic processing when new files arrive:
+Run full-stack hot reload from the repository root:
 
-```text
-ENCODE_WATCH_MODE=1
-ENCODE_FILE_STABLE_SECONDS=5
+```bash
+yarn dev
 ```
 
-Live encode preview in logs:
+Default `yarn dev` behavior:
 
-```text
-ENCODE_LIVE_PREVIEW=1
-ENCODE_PROGRESS_INTERVAL=2
-ENCODE_HEARTBEAT_SECONDS=10
+- Frontend: HMR enabled
+- Backend: stable process (no auto-restart)
+- If `BACKEND_PORT` is already in use, the dev runner reuses that existing backend instead of crashing.
+
+Use full hot mode only when editing backend code and no long transcodes are running:
+
+```bash
+yarn dev:hot
 ```
 
-This approximates your HandBrake behavior (first video + first audio, AAC stereo, no subtitles). HDR sources remain HDR with the script's HDR-preservation logic.
+Default dev ports:
 
-Current Lite behavior:
+- Backend API: `http://localhost:8081`
+- Frontend (Vite): `http://localhost:5173`
+- Frontend proxies `/api/*` to backend automatically
 
-- Rate control is QP-only (`ENCODE_QP`).
-- Progress bars use a fixed unicode style in logs.
+Default dev paths (auto-created if missing):
 
-### Recommended Profiles (i5-13400)
+- `MEDIA_DIR=./media`
+- `EXPORT_DIR=./export`
+- `CONFIG_DIR=./config`
 
-Use one of these ready-made profiles as a starting point.
+Optional overrides:
 
-#### Profile A: Fast + Safe (mixed library, recommended)
-
-```text
-ENCODE_METHOD=intel_h265
-ENCODE_QP=22
-ENCODE_PARALLEL_JOBS=2
-ENCODE_MAP_ARGS=-map 0:v:0 -map 0:a:0
-FFMPEG_CUSTOM_ARGS=-c:a aac -b:a 160k -ac 2 -sn
+```bash
+BACKEND_PORT=9090 FRONTEND_PORT=5174 yarn dev
 ```
 
-Best default for your CPU/iGPU combo. Good speed, good size reduction, stable for most 1080p and many 4K jobs.
+Run services individually if needed:
 
-#### Profile B: 4K HDR Stability (larger files, fewer surprises)
-
-```text
-ENCODE_METHOD=intel_h265
-ENCODE_QP=20
-ENCODE_PARALLEL_JOBS=2
-ENCODE_MAP_ARGS=-map 0:v:0 -map 0:a:0
-FFMPEG_CUSTOM_ARGS=-c:a copy -sn
+```bash
+yarn dev:backend
+yarn dev:backend:watch
+yarn dev:frontend
 ```
 
-Use this if your source is mostly 4K HDR and you want to keep quality more conservatively.
+Build both apps from the repository root:
 
-#### Profile C: Maximum Shrink (slower and lower quality)
-
-```text
-ENCODE_METHOD=intel_h265
-ENCODE_QP=24
-ENCODE_PARALLEL_JOBS=3
-ENCODE_MAP_ARGS=-map 0:v:0 -map 0:a:0
-FFMPEG_CUSTOM_ARGS=-c:a aac -b:a 128k -ac 2 -sn
+```bash
+yarn build
 ```
 
-Use this only if your main goal is smallest size. If quality drops too much, go back to Profile A.
+Docker builds use Corepack + Yarn 4 inside the container, so Yarn is the canonical lockfile source.
 
-Quick tuning rule:
+Run backend dev server manually:
 
-- Smaller files: raise QP by +1
-- Better quality: lower QP by -1
-- If you see instability or slowdowns with 3 jobs, set ENCODE_PARALLEL_JOBS back to 2
-
----
-
-## 📂 Folder Structure (Mappings)
-
-You need to map two volumes in Docker/Unraid:
-
-1. **Input:** Map your source media folder to `/import`.
-
-- _Note:_ The container needs **Read/Write** access to move finished files to `/import/finished`.
-
-2. **Output:** Map your destination folder to `/export`.
-
-**Example Workflow:**
-
-1. You place a TV Show folder `MySeries/Season 1/Episode 1.mkv` in `/import`.
-2. Script converts it and saves the new version to `/export/MySeries/Season 1/Episode 1.mkv`.
-3. Script moves the original to `/import/finished/MySeries/Season 1/Episode 1.mkv`.
-4. **Container Stops.** To convert new files later, simply restart the container.
-
----
-
-## 📜 License
-
-Distributed under the **GPL-3.0 license**. See `LICENSE` for more information.
-
----
-
-**Author:** [metronade](https://github.com/metronade)
-
+```bash
+cd backend
+yarn dev
 ```
 
+Run frontend dev server manually (second terminal):
+
+```bash
+cd frontend
+yarn dev
 ```
+
+Build frontend:
+
+```bash
+cd frontend
+yarn build
+```
+
+## Production Build
+
+Build image:
+
+```bash
+docker build -t transcode-harbor:latest .
+```
+
+Run container:
+
+```bash
+docker run --rm \
+  -p 8080:8080 \
+  -e MEDIA_DIR=/media \
+  -e EXPORT_DIR=/export \
+  -e CONFIG_DIR=/config \
+  -e PARALLEL_JOBS=1 \
+  -v /path/to/media:/media:ro \
+  -v /path/to/export:/export \
+  -v /path/to/config:/config \
+  transcode-harbor:latest
+```
+
+## Project Structure
+
+- [backend](backend): Fastify API, queue, FFmpeg integration
+- [frontend](frontend): Vue app and Tailwind UI
+- [config](config): local bind target for persisted history
+- [media](media): local bind target for source media
+- [export](export): local bind target for outputs
+
+## Troubleshooting
+
+- Hardware encoder not available:
+  - Linux: confirm `/dev/dri` mapping and host VAAPI support (`vainfo`).
+  - macOS: ensure FFmpeg build includes VideoToolbox.
+  - Check backend logs for fallback messages.
+- Output not visible:
+  - Verify `EXPORT_DIR` and volume mappings.
+  - Confirm source file extension is supported.
+- UI loads but no events:
+  - Ensure reverse proxies do not buffer SSE on `/api/events`.
+- Compare player fails in Chrome for MKV/HEVC:
+  - The app now auto-switches to a browser-compatible preview mode (`/api/stream/preview/*`) that generates cached H.264/AAC MP4 files.
+  - First load can take longer while preview files are generated.
+  - Preview cache is stored under `/config/preview-cache`.
+
+## License
+
+GPL-3.0. See [LICENSE](LICENSE).
