@@ -253,7 +253,7 @@ onBeforeUnmount(() => {
     @click.self="$emit('close')"
   >
     <div
-      class="flex max-h-[calc(100vh-40px)] w-[min(1100px,100%)] flex-col overflow-hidden rounded-[28px] border border-[var(--border)] bg-[rgba(14,16,24,0.98)] shadow-[var(--shadow-deep)] max-[760px]:max-h-screen max-[760px]:rounded-none"
+      class="flex h-[calc(100vh-28px)] w-[min(1440px,100%)] flex-col overflow-hidden rounded-[28px] border border-[var(--border)] bg-[rgba(14,16,24,0.98)] shadow-[var(--shadow-deep)] max-[760px]:h-screen max-[760px]:rounded-none"
     >
       <header
         class="flex items-center justify-between border-b border-white/10 px-5 py-3.5"
@@ -280,7 +280,7 @@ onBeforeUnmount(() => {
       <div
         ref="stageRef"
         :class="[
-          'relative min-h-[320px] flex-1 select-none overflow-hidden bg-black max-[760px]:min-h-[240px]',
+          'relative min-h-[480px] flex-1 select-none overflow-hidden bg-black max-[760px]:min-h-[260px]',
           isPanning
             ? 'cursor-grabbing'
             : zoom > 1

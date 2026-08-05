@@ -1,13 +1,31 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import { useStatusStore } from "../stores/status.ts";
+import type {
+  AudioMode,
+  EncoderChoice,
+  StreamSelection,
+  SubtitleMode,
+} from "../types.ts";
 
 const status = useStatusStore();
 
-const saving = ref(false);
-const saveError = ref<string | null>(null);
-const saveOk = ref<string | null>(null);
+const savingQueue = ref(false);
+const queueSaveError = ref<string | null>(null);
+const queueSaveOk = ref<string | null>(null);
+const savingDefaults = ref(false);
+const defaultsSaveError = ref<string | null>(null);
+const defaultsSaveOk = ref<string | null>(null);
 const draftParallelJobs = ref(status.parallelJobs);
+const draftQp = ref(status.defaultTranscode.qp);
+const draftEncoder = ref<EncoderChoice>(status.defaultTranscode.encoder);
+const draftStreamSelection = ref<StreamSelection>(
+  status.defaultTranscode.streamSelection,
+);
+const draftAudioMode = ref<AudioMode>(status.defaultTranscode.audioMode);
+const draftSubtitleMode = ref<SubtitleMode>(
+  status.defaultTranscode.subtitleMode,
+);
 
 watch(
   () => status.parallelJobs,
@@ -17,22 +35,63 @@ watch(
   { immediate: true },
 );
 
+watch(
+  () => status.defaultTranscode,
+  (next) => {
+    draftQp.value = next.qp;
+    draftEncoder.value = next.encoder;
+    draftStreamSelection.value = next.streamSelection;
+    draftAudioMode.value = next.audioMode;
+    draftSubtitleMode.value = next.subtitleMode;
+  },
+  { immediate: true, deep: true },
+);
+
 async function saveParallelJobs(): Promise<void> {
-  saveError.value = null;
-  saveOk.value = null;
-  saving.value = true;
+  queueSaveError.value = null;
+  queueSaveOk.value = null;
+  savingQueue.value = true;
 
   try {
+    const raw = Number(draftParallelJobs.value);
+    if (!Number.isFinite(raw) || !Number.isInteger(raw)) {
+      throw new Error("Parallel jobs must be a whole number.");
+    }
+
     const clamped = Math.max(
       status.settingsLimits.min,
-      Math.min(status.settingsLimits.max, Math.floor(draftParallelJobs.value)),
+      Math.min(status.settingsLimits.max, raw),
     );
+
+    draftParallelJobs.value = clamped;
     await status.updateParallelJobs(clamped);
-    saveOk.value = "Saved. New queue limit is active immediately.";
+    queueSaveOk.value = "Saved. New queue limit is active immediately.";
   } catch (err) {
-    saveError.value = err instanceof Error ? err.message : String(err);
+    queueSaveError.value = err instanceof Error ? err.message : String(err);
   } finally {
-    saving.value = false;
+    savingQueue.value = false;
+  }
+}
+
+async function saveTranscodeDefaults(): Promise<void> {
+  defaultsSaveError.value = null;
+  defaultsSaveOk.value = null;
+  savingDefaults.value = true;
+
+  try {
+    const clampedQp = Math.max(0, Math.min(51, Math.floor(draftQp.value)));
+    await status.updateDefaultTranscode({
+      qp: clampedQp,
+      encoder: draftEncoder.value,
+      streamSelection: draftStreamSelection.value,
+      audioMode: draftAudioMode.value,
+      subtitleMode: draftSubtitleMode.value,
+    });
+    defaultsSaveOk.value = "Saved default transcode options.";
+  } catch (err) {
+    defaultsSaveError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    savingDefaults.value = false;
   }
 }
 </script>
@@ -137,6 +196,10 @@ async function saveParallelJobs(): Promise<void> {
         <label class="text-[0.82rem] font-semibold text-[var(--text-muted)]"
           >Parallel jobs</label
         >
+        <p class="m-0 text-[0.8rem] text-[var(--text-dim)]">
+          Maximum number of files transcoded at the same time. Lower values
+          reduce CPU/GPU load; higher values improve throughput.
+        </p>
         <div class="flex items-center gap-3">
           <input
             v-model.number="draftParallelJobs"
@@ -148,21 +211,242 @@ async function saveParallelJobs(): Promise<void> {
           <button
             class="rounded-full border border-[rgba(109,212,236,0.35)] bg-[rgba(109,212,236,0.13)] px-4 py-2 text-[0.84rem] font-bold text-[var(--text)] transition-colors hover:bg-[rgba(109,212,236,0.2)] disabled:opacity-50"
             type="button"
-            :disabled="saving"
+            :disabled="savingQueue"
             @click="saveParallelJobs"
           >
-            {{ saving ? "Saving..." : "Apply" }}
+            {{ savingQueue ? "Saving..." : "Apply" }}
           </button>
         </div>
         <p class="m-0 text-[0.8rem] text-[var(--text-dim)]">
           Allowed range: {{ status.settingsLimits.min }} to
           {{ status.settingsLimits.max }}. Current: {{ status.parallelJobs }}.
         </p>
-        <p v-if="saveOk" class="m-0 text-[0.82rem] text-[var(--success)]">
-          {{ saveOk }}
+        <p v-if="queueSaveOk" class="m-0 text-[0.82rem] text-[var(--success)]">
+          {{ queueSaveOk }}
         </p>
-        <p v-if="saveError" class="m-0 text-[0.82rem] text-[var(--danger)]">
-          {{ saveError }}
+        <p
+          v-if="queueSaveError"
+          class="m-0 text-[0.82rem] text-[var(--danger)]"
+        >
+          {{ queueSaveError }}
+        </p>
+      </div>
+    </article>
+
+    <article
+      class="relative rounded-[28px] border border-white/10 bg-[var(--glass)] p-7 shadow-[var(--shadow-deep),var(--shadow-glow)] backdrop-blur-[18px] backdrop-saturate-150 max-[760px]:p-5"
+    >
+      <div class="mb-5">
+        <h2 class="m-0 text-[1.55rem] font-black tracking-[-0.03em]">
+          Default Transcode Options
+        </h2>
+        <p class="mt-2 text-[0.92rem] text-[var(--text-muted)]">
+          These defaults prefill the transcode dialog for files and folders.
+        </p>
+      </div>
+
+      <div class="grid gap-4">
+        <div class="grid gap-2">
+          <label class="text-[0.82rem] font-semibold text-[var(--text-muted)]"
+            >Quality (QP)</label
+          >
+          <p class="m-0 text-[0.8rem] text-[var(--text-dim)]">
+            Lower QP keeps more quality but larger files. Higher QP compresses
+            more but may lose detail.
+          </p>
+          <div class="flex items-center gap-3">
+            <input
+              v-model.number="draftQp"
+              class="w-24 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[var(--text)] outline-none focus:border-[rgba(109,212,236,0.35)]"
+              type="number"
+              min="0"
+              max="51"
+            />
+            <span class="text-[0.82rem] text-[var(--text-dim)]">0-51</span>
+          </div>
+        </div>
+
+        <div class="grid gap-2">
+          <label class="text-[0.82rem] font-semibold text-[var(--text-muted)]"
+            >Encoder</label
+          >
+          <p class="m-0 text-[0.8rem] text-[var(--text-dim)]">
+            Picks the video encoder backend. Hardware options are usually
+            faster; software is the compatibility fallback.
+          </p>
+          <div class="flex flex-wrap gap-2">
+            <button
+              type="button"
+              class="rounded-full border px-3.5 py-2 text-[0.8rem] font-bold"
+              :class="
+                draftEncoder === 'vaapi'
+                  ? 'border-[var(--accent)] bg-[rgba(109,212,236,0.12)]'
+                  : 'border-white/10 bg-white/[0.03] text-[var(--text-muted)]'
+              "
+              @click="draftEncoder = 'vaapi'"
+            >
+              VAAPI
+            </button>
+            <button
+              type="button"
+              class="rounded-full border px-3.5 py-2 text-[0.8rem] font-bold"
+              :class="
+                draftEncoder === 'videotoolbox'
+                  ? 'border-[var(--accent)] bg-[rgba(109,212,236,0.12)]'
+                  : 'border-white/10 bg-white/[0.03] text-[var(--text-muted)]'
+              "
+              @click="draftEncoder = 'videotoolbox'"
+            >
+              VideoToolbox
+            </button>
+            <button
+              type="button"
+              class="rounded-full border px-3.5 py-2 text-[0.8rem] font-bold"
+              :class="
+                draftEncoder === 'software'
+                  ? 'border-[var(--accent)] bg-[rgba(109,212,236,0.12)]'
+                  : 'border-white/10 bg-white/[0.03] text-[var(--text-muted)]'
+              "
+              @click="draftEncoder = 'software'"
+            >
+              Software
+            </button>
+          </div>
+        </div>
+
+        <div class="grid gap-2">
+          <label class="text-[0.82rem] font-semibold text-[var(--text-muted)]"
+            >Streams</label
+          >
+          <p class="m-0 text-[0.8rem] text-[var(--text-dim)]">
+            All streams preserves every video/audio/subtitle stream. First video
+            + audio keeps only the primary tracks.
+          </p>
+          <div class="flex flex-wrap gap-2">
+            <button
+              type="button"
+              class="rounded-full border px-3.5 py-2 text-[0.8rem] font-bold"
+              :class="
+                draftStreamSelection === 'all'
+                  ? 'border-[var(--accent)] bg-[rgba(109,212,236,0.12)]'
+                  : 'border-white/10 bg-white/[0.03] text-[var(--text-muted)]'
+              "
+              @click="draftStreamSelection = 'all'"
+            >
+              All streams
+            </button>
+            <button
+              type="button"
+              class="rounded-full border px-3.5 py-2 text-[0.8rem] font-bold"
+              :class="
+                draftStreamSelection === 'primary'
+                  ? 'border-[var(--accent)] bg-[rgba(109,212,236,0.12)]'
+                  : 'border-white/10 bg-white/[0.03] text-[var(--text-muted)]'
+              "
+              @click="draftStreamSelection = 'primary'"
+            >
+              First video + audio
+            </button>
+          </div>
+        </div>
+
+        <div class="grid gap-2">
+          <label class="text-[0.82rem] font-semibold text-[var(--text-muted)]"
+            >Audio</label
+          >
+          <p class="m-0 text-[0.8rem] text-[var(--text-dim)]">
+            Copy audio keeps original audio codec. Re-encode AAC improves
+            playback compatibility across browsers/devices.
+          </p>
+          <div class="flex flex-wrap gap-2">
+            <button
+              type="button"
+              class="rounded-full border px-3.5 py-2 text-[0.8rem] font-bold"
+              :class="
+                draftAudioMode === 'copy'
+                  ? 'border-[var(--accent)] bg-[rgba(109,212,236,0.12)]'
+                  : 'border-white/10 bg-white/[0.03] text-[var(--text-muted)]'
+              "
+              @click="draftAudioMode = 'copy'"
+            >
+              Copy audio
+            </button>
+            <button
+              type="button"
+              class="rounded-full border px-3.5 py-2 text-[0.8rem] font-bold"
+              :class="
+                draftAudioMode === 'aac'
+                  ? 'border-[var(--accent)] bg-[rgba(109,212,236,0.12)]'
+                  : 'border-white/10 bg-white/[0.03] text-[var(--text-muted)]'
+              "
+              @click="draftAudioMode = 'aac'"
+            >
+              Re-encode AAC
+            </button>
+          </div>
+        </div>
+
+        <div class="grid gap-2">
+          <label class="text-[0.82rem] font-semibold text-[var(--text-muted)]"
+            >Subtitles</label
+          >
+          <p class="m-0 text-[0.8rem] text-[var(--text-dim)]">
+            Keep subtitles copies subtitle streams into output. Remove subtitles
+            drops subtitle streams entirely.
+          </p>
+          <div class="flex flex-wrap gap-2">
+            <button
+              type="button"
+              class="rounded-full border px-3.5 py-2 text-[0.8rem] font-bold"
+              :class="
+                draftSubtitleMode === 'copy'
+                  ? 'border-[var(--accent)] bg-[rgba(109,212,236,0.12)]'
+                  : 'border-white/10 bg-white/[0.03] text-[var(--text-muted)]'
+              "
+              @click="draftSubtitleMode = 'copy'"
+            >
+              Keep subtitles
+            </button>
+            <button
+              type="button"
+              class="rounded-full border px-3.5 py-2 text-[0.8rem] font-bold"
+              :class="
+                draftSubtitleMode === 'drop'
+                  ? 'border-[var(--accent)] bg-[rgba(109,212,236,0.12)]'
+                  : 'border-white/10 bg-white/[0.03] text-[var(--text-muted)]'
+              "
+              @click="draftSubtitleMode = 'drop'"
+            >
+              Remove subtitles
+            </button>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <button
+            class="rounded-full border border-[rgba(109,212,236,0.35)] bg-[rgba(109,212,236,0.13)] px-4 py-2 text-[0.84rem] font-bold text-[var(--text)] transition-colors hover:bg-[rgba(109,212,236,0.2)] disabled:opacity-50"
+            type="button"
+            :disabled="savingDefaults"
+            @click="saveTranscodeDefaults"
+          >
+            {{ savingDefaults ? "Saving..." : "Save Defaults" }}
+          </button>
+          <p class="m-0 text-[0.8rem] text-[var(--text-dim)]">
+            Applied to new transcode dialogs.
+          </p>
+        </div>
+
+        <p
+          v-if="defaultsSaveOk"
+          class="m-0 text-[0.82rem] text-[var(--success)]"
+        >
+          {{ defaultsSaveOk }}
+        </p>
+        <p
+          v-if="defaultsSaveError"
+          class="m-0 text-[0.82rem] text-[var(--danger)]"
+        >
+          {{ defaultsSaveError }}
         </p>
       </div>
     </article>

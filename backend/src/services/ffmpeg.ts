@@ -176,6 +176,9 @@ export interface SpawnOptions {
   outputPath: string;
   qp: number;
   encoder: "vaapi" | "videotoolbox" | "software";
+  streamSelection: "all" | "primary";
+  audioMode: "copy" | "aac";
+  subtitleMode: "copy" | "drop";
   durationSeconds: number | null;
   onProgress: (pct: number, speed: string, elapsed: number) => void;
 }
@@ -190,6 +193,9 @@ export function spawnTranscode({
   outputPath,
   qp,
   encoder,
+  streamSelection,
+  audioMode,
+  subtitleMode,
   durationSeconds,
   onProgress,
 }: SpawnOptions): TranscodeHandle {
@@ -216,17 +222,32 @@ export function spawnTranscode({
       "va",
       "-vaapi_device",
       "/dev/dri/renderD128",
+      "-hwaccel",
+      "vaapi",
+      "-hwaccel_output_format",
+      "vaapi",
+      "-hwaccel_device",
+      "/dev/dri/renderD128",
     );
   }
 
-  args.push("-i", sourceAbs, "-map", "0");
+  args.push("-i", sourceAbs);
+
+  if (streamSelection === "primary") {
+    args.push("-map", "0:v:0", "-map", "0:a:0?");
+    if (subtitleMode === "copy") {
+      args.push("-map", "0:s:0?");
+    }
+  } else {
+    args.push("-map", "0");
+  }
 
   if (useVaapi) {
     const hdr = detectHdr(sourceAbs);
     if (hdr.isHdr && hdr.transfer && hdr.primaries && hdr.colorspace) {
       args.push(
         "-vf",
-        "format=p010le,hwupload",
+        "scale_vaapi=format=p010le",
         "-c:v",
         "hevc_vaapi",
         "-profile:v",
@@ -243,7 +264,7 @@ export function spawnTranscode({
     } else {
       args.push(
         "-vf",
-        "format=nv12,hwupload",
+        "scale_vaapi=format=nv12",
         "-c:v",
         "hevc_vaapi",
         "-qp",
@@ -268,7 +289,15 @@ export function spawnTranscode({
     args.push("-c:v", "libx265", "-preset", "medium", "-crf", String(qp));
   }
 
-  args.push("-c:a", "copy", "-c:s", "copy", outputAbs);
+  args.push("-c:a", audioMode === "aac" ? "aac" : "copy");
+
+  if (subtitleMode === "drop") {
+    args.push("-sn");
+  } else {
+    args.push("-c:s", "copy");
+  }
+
+  args.push(outputAbs);
 
   const startMs = Date.now();
   const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });

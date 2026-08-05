@@ -3,7 +3,7 @@ import { computed } from "vue";
 import { useQueueStore } from "../stores/queue.ts";
 import type { Job } from "../types.ts";
 
-const props = defineProps<{ job: Job }>();
+const props = defineProps<{ job: Job; queuedPosition?: number }>();
 defineEmits<{ compare: [job: Job] }>();
 const queue = useQueueStore();
 
@@ -37,6 +37,64 @@ const filename = computed(() => {
   const parts = props.job.sourcePath.split("/");
   return parts[parts.length - 1] ?? props.job.sourcePath;
 });
+
+const queuedLabel = computed(() => {
+  if (props.job.state !== "queued") return null;
+  if (!props.queuedPosition || props.queuedPosition < 1) return "Queued";
+  return `Queued #${props.queuedPosition}`;
+});
+
+const etaSeconds = computed(() => {
+  if (props.job.state !== "running") return null;
+  if (!Number.isFinite(props.job.elapsed) || props.job.elapsed <= 0)
+    return null;
+  if (
+    !Number.isFinite(props.job.pct) ||
+    props.job.pct <= 0 ||
+    props.job.pct >= 100
+  ) {
+    return null;
+  }
+  return Math.round(
+    (props.job.elapsed * (100 - props.job.pct)) / props.job.pct,
+  );
+});
+
+function fmtDuration(totalSeconds: number): string {
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+  if (m > 0) return `${m}m ${String(s).padStart(2, "0")}s`;
+  return `${s}s`;
+}
+
+function formatTime(iso: string | null): string {
+  if (!iso) return "n/a";
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "n/a";
+  return d.toLocaleTimeString();
+}
+
+function encoderLabel(job: Job): string {
+  return job.encoder === "vaapi"
+    ? "VAAPI"
+    : job.encoder === "videotoolbox"
+      ? "VideoToolbox"
+      : "Software";
+}
+
+function streamLabel(job: Job): string {
+  return job.streamSelection === "primary" ? "Primary A/V" : "All streams";
+}
+
+function audioLabel(job: Job): string {
+  return job.audioMode === "aac" ? "AAC" : "Copy";
+}
+
+function subtitleLabel(job: Job): string {
+  return job.subtitleMode === "drop" ? "Drop" : "Copy";
+}
 </script>
 
 <template>
@@ -49,7 +107,7 @@ const filename = computed(() => {
           class="m-0 text-[0.72rem] font-bold uppercase tracking-[0.16em]"
           :class="stateClass"
         >
-          {{ job.state }}
+          {{ queuedLabel ?? job.state }}
         </p>
         <h3
           :title="job.sourcePath"
@@ -96,8 +154,33 @@ const filename = computed(() => {
           job.speed
         }}</span>
         <span>{{ job.elapsed }}s elapsed</span>
+        <span v-if="etaSeconds !== null"
+          >~{{ fmtDuration(etaSeconds) }} left</span
+        >
       </div>
     </template>
+
+    <div
+      class="mt-2.5 flex flex-wrap gap-x-3.5 gap-y-1 text-[0.82rem] text-[var(--text-dim)]"
+    >
+      <span>QP {{ job.qp }}</span>
+      <span>{{ encoderLabel(job) }}</span>
+      <span>{{ streamLabel(job) }}</span>
+      <span>Audio {{ audioLabel(job) }}</span>
+      <span>Subs {{ subtitleLabel(job) }}</span>
+      <span>Created {{ formatTime(job.createdAt) }}</span>
+      <span v-if="job.startedAt">Started {{ formatTime(job.startedAt) }}</span>
+      <span v-if="job.finishedAt"
+        >Finished {{ formatTime(job.finishedAt) }}</span
+      >
+    </div>
+
+    <p
+      class="mt-1 overflow-hidden text-ellipsis whitespace-nowrap text-[0.8rem] text-[var(--text-dim)]"
+      :title="job.outputPath"
+    >
+      Output: {{ job.outputPath }}
+    </p>
 
     <template v-if="job.state === 'done'">
       <div

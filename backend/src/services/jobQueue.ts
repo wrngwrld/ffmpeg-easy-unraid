@@ -13,6 +13,9 @@ import { recordEntry } from "./stats.js";
 
 export type JobState = "queued" | "running" | "done" | "failed" | "cancelled";
 export type EncoderChoice = "vaapi" | "videotoolbox" | "software";
+export type StreamSelection = "all" | "primary";
+export type AudioMode = "copy" | "aac";
+export type SubtitleMode = "copy" | "drop";
 
 export interface Job {
   id: string;
@@ -20,6 +23,9 @@ export interface Job {
   outputPath: string;
   qp: number;
   encoder: EncoderChoice;
+  streamSelection: StreamSelection;
+  audioMode: AudioMode;
+  subtitleMode: SubtitleMode;
   state: JobState;
   pct: number;
   speed: string;
@@ -76,6 +82,9 @@ export function addJob(
   sourcePath: string,
   qp: number,
   encoder: EncoderChoice,
+  streamSelection: StreamSelection = "all",
+  audioMode: AudioMode = "copy",
+  subtitleMode: SubtitleMode = "copy",
 ): Job {
   const effectiveEncoder: EncoderChoice =
     encoder === "vaapi" && !isEncoderAvailable("vaapi")
@@ -90,6 +99,9 @@ export function addJob(
     outputPath: outputPathFor(sourcePath),
     qp,
     encoder: effectiveEncoder,
+    streamSelection,
+    audioMode,
+    subtitleMode,
     state: "queued",
     pct: 0,
     speed: "n/a",
@@ -172,6 +184,9 @@ async function runJob(job: Job): Promise<void> {
       outputPath: job.outputPath,
       qp: job.qp,
       encoder: job.encoder,
+      streamSelection: job.streamSelection,
+      audioMode: job.audioMode,
+      subtitleMode: job.subtitleMode,
       durationSeconds,
       onProgress: (pct, speed, elapsed) => {
         if (cancelled) return;

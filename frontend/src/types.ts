@@ -1,5 +1,8 @@
 export type JobState = "queued" | "running" | "done" | "failed" | "cancelled";
 export type EncoderChoice = "vaapi" | "videotoolbox" | "software";
+export type StreamSelection = "all" | "primary";
+export type AudioMode = "copy" | "aac";
+export type SubtitleMode = "copy" | "drop";
 
 export interface Job {
   id: string;
@@ -7,6 +10,9 @@ export interface Job {
   outputPath: string;
   qp: number;
   encoder: EncoderChoice;
+  streamSelection: StreamSelection;
+  audioMode: AudioMode;
+  subtitleMode: SubtitleMode;
   state: JobState;
   pct: number;
   speed: string;
@@ -56,8 +62,17 @@ export interface StatsTotals {
   avgSavedPercent: number;
 }
 
+export interface TranscodeDefaults {
+  qp: number;
+  encoder: EncoderChoice;
+  streamSelection: StreamSelection;
+  audioMode: AudioMode;
+  subtitleMode: SubtitleMode;
+}
+
 export interface AppSettings {
   parallelJobs: number;
+  defaultTranscode: TranscodeDefaults;
 }
 
 export interface AppSettingsLimits {

@@ -2,7 +2,13 @@
 import { ref, computed, watch } from "vue";
 import { useQueueStore } from "../stores/queue.ts";
 import { useStatusStore } from "../stores/status.ts";
-import type { FsEntry, EncoderChoice } from "../types.ts";
+import type {
+  AudioMode,
+  EncoderChoice,
+  FsEntry,
+  StreamSelection,
+  SubtitleMode,
+} from "../types.ts";
 
 const props = defineProps<{ path: string; entry: FsEntry }>();
 const emit = defineEmits<{ close: []; submitted: [] }>();
@@ -10,8 +16,13 @@ const emit = defineEmits<{ close: []; submitted: [] }>();
 const queue = useQueueStore();
 const status = useStatusStore();
 
-const qp = ref(22);
-const encoder = ref<EncoderChoice>("vaapi");
+const qp = ref(status.defaultTranscode.qp);
+const encoder = ref<EncoderChoice>(status.defaultTranscode.encoder);
+const streamSelection = ref<StreamSelection>(
+  status.defaultTranscode.streamSelection,
+);
+const audioMode = ref<AudioMode>(status.defaultTranscode.audioMode);
+const subtitleMode = ref<SubtitleMode>(status.defaultTranscode.subtitleMode);
 const submitting = ref(false);
 const errorMsg = ref<string | null>(null);
 const successMsg = ref<string | null>(null);
@@ -23,13 +34,24 @@ const canVideoToolbox = computed(() =>
 const isDirectory = computed(() => props.entry.type === "directory");
 
 watch(
-  () => status.availableEncoders,
-  (encoders) => {
-    if (encoders.includes("vaapi")) {
+  () => [status.availableEncoders, status.defaultTranscode] as const,
+  ([available]) => {
+    qp.value = status.defaultTranscode.qp;
+    streamSelection.value = status.defaultTranscode.streamSelection;
+    audioMode.value = status.defaultTranscode.audioMode;
+    subtitleMode.value = status.defaultTranscode.subtitleMode;
+
+    const preferred = status.defaultTranscode.encoder;
+    if (available.includes(preferred)) {
+      encoder.value = preferred;
+      return;
+    }
+
+    if (available.includes("vaapi")) {
       encoder.value = "vaapi";
       return;
     }
-    if (encoders.includes("videotoolbox")) {
+    if (available.includes("videotoolbox")) {
       encoder.value = "videotoolbox";
       return;
     }
@@ -55,6 +77,9 @@ async function submit(): Promise<void> {
         props.path,
         qp.value,
         encoder.value,
+        streamSelection.value,
+        audioMode.value,
+        subtitleMode.value,
       );
       successMsg.value = `Queued ${queued} file${queued === 1 ? "" : "s"}.`;
       emit("submitted");
@@ -62,7 +87,14 @@ async function submit(): Promise<void> {
       return;
     }
 
-    await queue.submit(props.path, qp.value, encoder.value);
+    await queue.submit(
+      props.path,
+      qp.value,
+      encoder.value,
+      streamSelection.value,
+      audioMode.value,
+      subtitleMode.value,
+    );
     successMsg.value = "Queued 1 file.";
     emit("submitted");
     emit("close");
@@ -194,6 +226,105 @@ async function submit(): Promise<void> {
             @click="encoder = 'software'"
           >
             Software (libx265)
+          </button>
+        </div>
+      </div>
+
+      <div class="mb-[22px]">
+        <label
+          class="mb-2.5 block text-[0.88rem] font-semibold text-[var(--text-muted)]"
+          >Streams</label
+        >
+        <div class="flex gap-2">
+          <button
+            type="button"
+            class="flex-1 rounded-[14px] border px-4 py-3 text-[0.88rem] font-bold transition-all"
+            :class="
+              streamSelection === 'all'
+                ? 'border-[var(--accent)] bg-[rgba(109,212,236,0.12)] text-[var(--text)]'
+                : 'border-white/10 bg-white/[0.03] text-[var(--text-muted)]'
+            "
+            @click="streamSelection = 'all'"
+          >
+            Keep All Streams
+          </button>
+          <button
+            type="button"
+            class="flex-1 rounded-[14px] border px-4 py-3 text-[0.88rem] font-bold transition-all"
+            :class="
+              streamSelection === 'primary'
+                ? 'border-[var(--accent)] bg-[rgba(109,212,236,0.12)] text-[var(--text)]'
+                : 'border-white/10 bg-white/[0.03] text-[var(--text-muted)]'
+            "
+            @click="streamSelection = 'primary'"
+          >
+            First Video + Audio
+          </button>
+        </div>
+      </div>
+
+      <div class="mb-[22px]">
+        <label
+          class="mb-2.5 block text-[0.88rem] font-semibold text-[var(--text-muted)]"
+          >Audio Streams</label
+        >
+        <div class="flex gap-2">
+          <button
+            type="button"
+            class="flex-1 rounded-[14px] border px-4 py-3 text-[0.88rem] font-bold transition-all"
+            :class="
+              audioMode === 'copy'
+                ? 'border-[var(--accent)] bg-[rgba(109,212,236,0.12)] text-[var(--text)]'
+                : 'border-white/10 bg-white/[0.03] text-[var(--text-muted)]'
+            "
+            @click="audioMode = 'copy'"
+          >
+            Copy Audio
+          </button>
+          <button
+            type="button"
+            class="flex-1 rounded-[14px] border px-4 py-3 text-[0.88rem] font-bold transition-all"
+            :class="
+              audioMode === 'aac'
+                ? 'border-[var(--accent)] bg-[rgba(109,212,236,0.12)] text-[var(--text)]'
+                : 'border-white/10 bg-white/[0.03] text-[var(--text-muted)]'
+            "
+            @click="audioMode = 'aac'"
+          >
+            Re-encode to AAC
+          </button>
+        </div>
+      </div>
+
+      <div class="mb-[22px]">
+        <label
+          class="mb-2.5 block text-[0.88rem] font-semibold text-[var(--text-muted)]"
+          >Subtitle Streams</label
+        >
+        <div class="flex gap-2">
+          <button
+            type="button"
+            class="flex-1 rounded-[14px] border px-4 py-3 text-[0.88rem] font-bold transition-all"
+            :class="
+              subtitleMode === 'copy'
+                ? 'border-[var(--accent)] bg-[rgba(109,212,236,0.12)] text-[var(--text)]'
+                : 'border-white/10 bg-white/[0.03] text-[var(--text-muted)]'
+            "
+            @click="subtitleMode = 'copy'"
+          >
+            Keep Subtitles
+          </button>
+          <button
+            type="button"
+            class="flex-1 rounded-[14px] border px-4 py-3 text-[0.88rem] font-bold transition-all"
+            :class="
+              subtitleMode === 'drop'
+                ? 'border-[var(--accent)] bg-[rgba(109,212,236,0.12)] text-[var(--text)]'
+                : 'border-white/10 bg-white/[0.03] text-[var(--text-muted)]'
+            "
+            @click="subtitleMode = 'drop'"
+          >
+            Remove Subtitles
           </button>
         </div>
       </div>

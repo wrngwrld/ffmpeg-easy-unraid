@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import JobCard from "../components/JobCard.vue";
 import VideoCompare from "../components/VideoCompare.vue";
 import { useQueueStore } from "../stores/queue.ts";
@@ -10,6 +10,37 @@ const queue = useQueueStore();
 const status = useStatusStore();
 
 const comparing = ref<Job | null>(null);
+
+const runningCount = computed(
+  () => queue.activeJobs.filter((j) => j.state === "running").length,
+);
+const queuedCount = computed(() => queue.queuedJobs.length);
+const queuedPositions = computed(
+  () => new Map(queue.queuedJobs.map((job, idx) => [job.id, idx + 1])),
+);
+
+function estimateRemainingSeconds(job: Job): number | null {
+  if (job.state !== "running") return null;
+  if (!Number.isFinite(job.elapsed) || job.elapsed <= 0) return null;
+  if (!Number.isFinite(job.pct) || job.pct <= 0 || job.pct >= 100) return null;
+  return Math.round((job.elapsed * (100 - job.pct)) / job.pct);
+}
+
+const totalRunningEtaSeconds = computed(() =>
+  queue.activeJobs
+    .map(estimateRemainingSeconds)
+    .filter((v): v is number => v !== null)
+    .reduce((sum, secs) => sum + secs, 0),
+);
+
+function fmtDuration(totalSeconds: number): string {
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+  if (m > 0) return `${m}m ${String(s).padStart(2, "0")}s`;
+  return `${s}s`;
+}
 </script>
 
 <template>
@@ -48,6 +79,45 @@ const comparing = ref<Job | null>(null);
       </div>
     </div>
 
+    <div class="mb-5 grid grid-cols-3 gap-2.5 max-[900px]:grid-cols-2">
+      <article
+        class="rounded-[14px] border border-white/10 bg-white/[0.03] px-3.5 py-2.5"
+      >
+        <p
+          class="m-0 text-[0.7rem] font-bold uppercase tracking-[0.14em] text-[var(--text-dim)]"
+        >
+          Running
+        </p>
+        <p class="mt-1 text-[1.15rem] font-black">{{ runningCount }}</p>
+      </article>
+      <article
+        class="rounded-[14px] border border-white/10 bg-white/[0.03] px-3.5 py-2.5"
+      >
+        <p
+          class="m-0 text-[0.7rem] font-bold uppercase tracking-[0.14em] text-[var(--text-dim)]"
+        >
+          Queued
+        </p>
+        <p class="mt-1 text-[1.15rem] font-black">{{ queuedCount }}</p>
+      </article>
+      <article
+        class="rounded-[14px] border border-white/10 bg-white/[0.03] px-3.5 py-2.5 max-[900px]:col-span-2"
+      >
+        <p
+          class="m-0 text-[0.7rem] font-bold uppercase tracking-[0.14em] text-[var(--text-dim)]"
+        >
+          Running ETA Sum
+        </p>
+        <p class="mt-1 text-[1.15rem] font-black">
+          {{
+            totalRunningEtaSeconds > 0
+              ? `~${fmtDuration(totalRunningEtaSeconds)}`
+              : "n/a"
+          }}
+        </p>
+      </article>
+    </div>
+
     <section v-if="queue.activeJobs.length">
       <h3
         class="mb-3 text-[0.78rem] font-bold uppercase tracking-[0.14em] text-[var(--text-dim)]"
@@ -59,6 +129,7 @@ const comparing = ref<Job | null>(null);
           v-for="job in queue.activeJobs"
           :key="job.id"
           :job="job"
+          :queued-position="queuedPositions.get(job.id)"
           @compare="comparing = $event"
         />
       </div>
