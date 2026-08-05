@@ -12,8 +12,6 @@ services:
 
     environment:
       - PARALLEL_JOBS=1
-      - UNRAID_UID=1000
-      - UNRAID_GID=1000
 
     volumes:
       - ./media:/media:ro # mount your whole media library read-only
