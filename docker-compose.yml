@@ -11,9 +11,6 @@ services:
       - SYS_NICE
 
     environment:
-      - MEDIA_DIR=/media
-      - EXPORT_DIR=/export
-      - CONFIG_DIR=/config
       - PARALLEL_JOBS=1
       - ADMIN_PORT=8080
       - UNRAID_UID=1000

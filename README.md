@@ -79,9 +79,6 @@ On startup, the backend probes available hardware encoders. If none are availabl
 
 | Variable        | Default                                  | Description                                                         |
 | --------------- | ---------------------------------------- | ------------------------------------------------------------------- |
-| `MEDIA_DIR`     | `/media`                                 | Root input directory exposed in the browser/API.                    |
-| `EXPORT_DIR`    | `/export`                                | Output root for transcoded files.                                   |
-| `CONFIG_DIR`    | `/config`                                | Persistent app state (history stats).                               |
 | `ADMIN_PORT`    | `8080`                                   | HTTP port used by backend and served frontend.                      |
 | `PARALLEL_JOBS` | `1`                                      | Max concurrent transcode jobs. Minimum is 1.                        |
 | `STATIC_ROOT`   | auto                                     | Frontend assets path. In Docker: `/opt/transcode-harbor/web`.       |
@@ -149,11 +146,11 @@ Default dev ports:
 - Frontend (Vite): `http://localhost:5173`
 - Frontend proxies `/api/*` to backend automatically
 
-Default dev paths (auto-created if missing):
+Default dev directories (auto-created if missing):
 
-- `MEDIA_DIR=./media`
-- `EXPORT_DIR=./export`
-- `CONFIG_DIR=./config`
+- `./media`
+- `./export`
+- `./config`
 
 Optional overrides:
 
@@ -211,9 +208,6 @@ Run container:
 ```bash
 docker run --rm \
   -p 8080:8080 \
-  -e MEDIA_DIR=/media \
-  -e EXPORT_DIR=/export \
-  -e CONFIG_DIR=/config \
   -e PARALLEL_JOBS=1 \
   -v /path/to/media:/media:ro \
   -v /path/to/export:/export \
@@ -236,7 +230,7 @@ docker run --rm \
   - macOS: ensure FFmpeg build includes VideoToolbox.
   - Check backend logs for fallback messages.
 - Output not visible:
-  - Verify `EXPORT_DIR` and volume mappings.
+  - Verify your `/export` volume mapping.
   - Confirm source file extension is supported.
 - UI loads but no events:
   - Ensure reverse proxies do not buffer SSE on `/api/events`.
