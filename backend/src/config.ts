@@ -15,6 +15,7 @@ export const STATIC_ROOT =
   path.resolve(import.meta.dirname, "../../frontend/dist");
 
 export const STATS_FILE = path.join(CONFIG_DIR, "stats.json");
+export const SETTINGS_FILE = path.join(CONFIG_DIR, "settings.json");
 
 export const MEDIA_EXTENSIONS = new Set([
   ".mkv",

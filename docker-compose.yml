@@ -10,9 +10,6 @@ services:
     cap_add:
       - SYS_NICE
 
-    environment:
-      - PARALLEL_JOBS=1
-
     volumes:
       - ./media:/media:ro # mount your whole media library read-only
       - ./export:/export

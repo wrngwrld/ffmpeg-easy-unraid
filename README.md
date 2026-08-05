@@ -22,7 +22,7 @@ Important: this is queue-driven and UI-driven. It does not auto-scan folders on 
 - Interactive media browser rooted at `/media`
 - Queue-based workflow with cancel support
 - Queue one file or queue an entire folder recursively
-- Parallel workers (`PARALLEL_JOBS`)
+- Parallel workers with live limit control in the System page
 - Hardware probing with fallback:
   - Linux: VAAPI (`hevc_vaapi`)
   - macOS: VideoToolbox (`hevc_videotoolbox`)
@@ -75,11 +75,7 @@ devices:
 
 On startup, the backend probes available hardware encoders. If none are available, jobs still run with `libx265`.
 
-## Environment Variables
-
-| Variable        | Default | Description                                  |
-| --------------- | ------- | -------------------------------------------- |
-| `PARALLEL_JOBS` | `1`     | Max concurrent transcode jobs. Minimum is 1. |
+Queue parallelism is configurable at runtime from the System page.
 
 `STATIC_ROOT` is an internal image/runtime path and usually should not be set in Unraid templates.
 
@@ -206,7 +202,6 @@ Run container:
 ```bash
 docker run --rm \
   -p 8080:8080 \
-  -e PARALLEL_JOBS=1 \
   -v /path/to/media:/media:ro \
   -v /path/to/export:/export \
   -v /path/to/config:/config \

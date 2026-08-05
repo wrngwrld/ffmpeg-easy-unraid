@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { EventEmitter } from "node:events";
-import { EXPORT_DIR, MEDIA_DIR, PARALLEL_JOBS } from "../config.js";
+import { EXPORT_DIR, MEDIA_DIR } from "../config.js";
+import { readSettings } from "./settings.js";
 import {
   spawnTranscode,
   getFileDuration,
@@ -39,7 +40,22 @@ queueEvents.setMaxListeners(200);
 
 const jobs = new Map<string, Job>();
 let runningCount = 0;
+let parallelJobs = readSettings().parallelJobs;
 const cancelHandles = new Map<string, () => void>();
+
+export function getParallelJobs(): number {
+  return parallelJobs;
+}
+
+export function setParallelJobs(next: number): number {
+  parallelJobs = Math.max(1, Math.floor(next) || 1);
+  queueEvents.emit("event", {
+    type: "settings-updated",
+    parallelJobs,
+  });
+  void drain();
+  return parallelJobs;
+}
 
 export function getJobs(): Job[] {
   return [...jobs.values()].sort(
@@ -117,7 +133,7 @@ function snapshot(job: Job): Job {
 }
 
 async function drain(): Promise<void> {
-  while (runningCount < PARALLEL_JOBS) {
+  while (runningCount < parallelJobs) {
     const next = [...jobs.values()].find((j) => j.state === "queued");
     if (!next) break;
     runningCount++;

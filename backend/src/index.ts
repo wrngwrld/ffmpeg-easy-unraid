@@ -8,6 +8,7 @@ import transcodeRoute from "./routes/transcode.js";
 import streamRoute from "./routes/stream.js";
 import historyRoute from "./routes/history.js";
 import eventsRoute from "./routes/events.js";
+import settingsRoute from "./routes/settings.js";
 
 async function main(): Promise<void> {
   await mkdir(CONFIG_DIR, { recursive: true });
@@ -34,6 +35,7 @@ async function main(): Promise<void> {
   await app.register(eventsRoute);
   await app.register(fsRoute);
   await app.register(transcodeRoute);
+  await app.register(settingsRoute);
   await app.register(streamRoute);
   await app.register(historyRoute);
 

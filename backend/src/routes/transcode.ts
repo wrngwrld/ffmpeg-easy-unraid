@@ -1,7 +1,12 @@
 import type { FastifyPluginAsync } from "fastify";
 import fs from "node:fs";
 import path from "node:path";
-import { addJob, cancelJob, getJobs } from "../services/jobQueue.js";
+import {
+  addJob,
+  cancelJob,
+  getJobs,
+  getParallelJobs,
+} from "../services/jobQueue.js";
 import { getAvailableEncoders } from "../services/ffmpeg.js";
 import type { EncoderChoice } from "../services/jobQueue.js";
 import { MEDIA_DIR, MEDIA_EXTENSIONS } from "../config.js";
@@ -87,6 +92,7 @@ const transcodeRoute: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/jobs", async () => ({
     jobs: getJobs(),
     availableEncoders: getAvailableEncoders(),
+    parallelJobs: getParallelJobs(),
   }));
 
   fastify.post<{ Body: TranscodeBody }>(

@@ -55,3 +55,12 @@ export interface StatsTotals {
   savedBytes: number;
   avgSavedPercent: number;
 }
+
+export interface AppSettings {
+  parallelJobs: number;
+}
+
+export interface AppSettingsLimits {
+  min: number;
+  max: number;
+}
