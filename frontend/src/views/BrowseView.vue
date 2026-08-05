@@ -1,13 +1,29 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import FileBrowser from "../components/FileBrowser.vue";
+import SelectionQueueDialog from "../components/SelectionQueueDialog.vue";
 import TranscodeDialog from "../components/TranscodeDialog.vue";
 import type { FsEntry } from "../types.ts";
 
 const selected = ref<{ path: string; entry: FsEntry } | null>(null);
+const selectedFiles = ref<{ paths: string[]; basePath: string } | null>(null);
+const selectionInfo = ref<string | null>(null);
+const selectionError = ref<string | null>(null);
 
 function onSelect(path: string, entry: FsEntry): void {
   selected.value = { path, entry };
+}
+
+function onQueueSelected(paths: string[], basePath: string): void {
+  if (!paths.length) return;
+  selectionInfo.value = null;
+  selectionError.value = null;
+  selectedFiles.value = { paths, basePath };
+}
+
+function onSelectionSubmitted(queued: number): void {
+  selectionError.value = null;
+  selectionInfo.value = `Queued ${queued} selected file${queued === 1 ? "" : "s"}.`;
 }
 </script>
 
@@ -35,7 +51,20 @@ function onSelect(path: string, entry: FsEntry): void {
       </div>
     </div>
 
-    <FileBrowser @select="onSelect" />
+    <p
+      v-if="selectionInfo"
+      class="mb-4 mt-0 text-[0.86rem] text-[var(--success)]"
+    >
+      {{ selectionInfo }}
+    </p>
+    <p
+      v-if="selectionError"
+      class="mb-4 mt-0 text-[0.86rem] text-[var(--danger)]"
+    >
+      {{ selectionError }}
+    </p>
+
+    <FileBrowser @select="onSelect" @queue-selected="onQueueSelected" />
   </div>
 
   <TranscodeDialog
@@ -44,5 +73,13 @@ function onSelect(path: string, entry: FsEntry): void {
     :entry="selected.entry"
     @close="selected = null"
     @submitted="selected = null"
+  />
+
+  <SelectionQueueDialog
+    v-if="selectedFiles"
+    :paths="selectedFiles.paths"
+    :base-path="selectedFiles.basePath"
+    @close="selectedFiles = null"
+    @submitted="onSelectionSubmitted"
   />
 </template>

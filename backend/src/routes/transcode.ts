@@ -67,6 +67,17 @@ interface TranscodeFolderBody {
   subtitleMode?: string;
 }
 
+interface TranscodeFilesBody {
+  sourcePaths: string[];
+  batchName?: string;
+  overwriteExisting?: boolean;
+  qp?: number;
+  encoder?: string;
+  streamSelection?: string;
+  audioMode?: string;
+  subtitleMode?: string;
+}
+
 function defaultBatchName(inputPath: string): string {
   const clean = inputPath.trim().replace(/[\\/]+$/, "");
   const base = path.basename(clean);
@@ -228,6 +239,13 @@ function collectMediaFiles(absFolder: string): string[] {
   return files.sort((a, b) =>
     a.localeCompare(b, undefined, { sensitivity: "base" }),
   );
+}
+
+function inferBatchSourcePath(sourcePaths: string[]): string {
+  if (!sourcePaths.length) return "/";
+  const first = sourcePaths[0] ?? "/";
+  const dir = path.posix.dirname(first.replace(/\\/g, "/"));
+  return dir && dir !== "." ? dir : "/";
 }
 
 const transcodeRoute: FastifyPluginAsync = async (fastify) => {
@@ -538,6 +556,186 @@ const transcodeRoute: FastifyPluginAsync = async (fastify) => {
       queueEvents.emit("event", { type: "batch-added", batch });
 
       const jobs = files.map((sourcePath) => {
+        const autoStreamMap =
+          chosenStreamSelection === "primary"
+            ? pickPrimaryStreamMap(
+                probeMediaStreams(path.join(MEDIA_DIR, sourcePath)),
+                streamPrefs,
+              )
+            : undefined;
+
+        return addJob(
+          batch.id,
+          sourcePath,
+          effectiveQp,
+          chosenEncoder,
+          chosenStreamSelection,
+          autoStreamMap,
+          chosenAudioMode,
+          chosenSubtitleMode,
+        );
+      });
+
+      const updatedBatch = appendBatchJobs(
+        batch.id,
+        jobs.map((job) => job.id),
+      );
+      if (updatedBatch) {
+        queueEvents.emit("event", {
+          type: "batch-updated",
+          batch: updatedBatch,
+        });
+      }
+
+      return reply.code(201).send({
+        queued: jobs.length,
+        batchId: batch.id,
+        firstJobId: jobs[0]?.id ?? null,
+      });
+    },
+  );
+
+  fastify.post<{ Body: TranscodeFilesBody }>(
+    "/api/transcode/files",
+    async (req, reply) => {
+      const {
+        sourcePaths,
+        batchName,
+        overwriteExisting,
+        qp,
+        encoder,
+        streamSelection,
+        audioMode,
+        subtitleMode,
+      } = req.body ?? {};
+      const appSettings = readSettings();
+      const defaults = appSettings.defaultTranscode;
+      const streamPrefs = appSettings.defaultStreamMatching;
+      const activeOutputs = buildActiveOutputSet(getJobs());
+      const canOverwrite = overwriteExisting === true;
+
+      if (!Array.isArray(sourcePaths) || sourcePaths.length < 1) {
+        return reply
+          .code(400)
+          .send({ error: "sourcePaths must be a non-empty array" });
+      }
+
+      const normalizedUnique = [...new Set(sourcePaths)]
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0);
+
+      if (!normalizedUnique.length) {
+        return reply
+          .code(400)
+          .send({ error: "sourcePaths must include valid file paths" });
+      }
+
+      const validatedPaths: string[] = [];
+      for (const sourcePath of normalizedUnique) {
+        const abs = safePath(sourcePath);
+        if (!abs) {
+          return reply
+            .code(400)
+            .send({ error: `Invalid sourcePath: ${sourcePath}` });
+        }
+
+        let st: fs.Stats;
+        try {
+          st = fs.statSync(abs);
+        } catch {
+          return reply
+            .code(404)
+            .send({ error: `File not found: ${sourcePath}` });
+        }
+
+        if (!st.isFile()) {
+          return reply
+            .code(400)
+            .send({ error: `sourcePath must be a file: ${sourcePath}` });
+        }
+
+        const ext = path.extname(abs).toLowerCase();
+        if (!MEDIA_EXTENSIONS.has(ext)) {
+          return reply.code(400).send({
+            error: `Unsupported media extension for ${sourcePath}`,
+          });
+        }
+
+        validatedPaths.push(sourcePath);
+      }
+
+      const effectiveQp = qp ?? defaults.qp;
+      if (
+        typeof effectiveQp !== "number" ||
+        !Number.isInteger(effectiveQp) ||
+        effectiveQp < 0 ||
+        effectiveQp > 51
+      ) {
+        return reply.code(400).send({ error: "qp must be an integer 0–51" });
+      }
+
+      const conflicts = validatedPaths
+        .map((sourcePath) => {
+          const conflict = checkOutputConflict(
+            sourcePath,
+            activeOutputs,
+            canOverwrite,
+          );
+          if (!conflict) return null;
+          return {
+            sourcePath,
+            outputPath: conflict.outputPath,
+            reason: conflict.reason,
+          };
+        })
+        .filter(
+          (
+            item,
+          ): item is {
+            sourcePath: string;
+            outputPath: string;
+            reason: "exists" | "active";
+          } => item !== null,
+        );
+
+      if (conflicts.length) {
+        return reply.code(409).send({
+          error:
+            "Selection contains files whose output already exists or is already queued/running",
+          conflictCount: conflicts.length,
+          conflicts: conflicts.slice(0, 50),
+        });
+      }
+
+      const chosenEncoder = pickEncoder(encoder ?? defaults.encoder);
+      const chosenStreamSelection = pickStreamSelection(
+        streamSelection ?? defaults.streamSelection,
+      );
+      const chosenAudioMode = pickAudioMode(audioMode ?? defaults.audioMode);
+      const chosenSubtitleMode = pickSubtitleMode(
+        subtitleMode ?? defaults.subtitleMode,
+      );
+
+      const batchOptions: BatchOptions = {
+        qp: effectiveQp,
+        encoder: chosenEncoder,
+        streamSelection: chosenStreamSelection,
+        audioMode: chosenAudioMode,
+        subtitleMode: chosenSubtitleMode,
+        streamMatching: streamPrefs,
+      };
+
+      const inferredSourcePath = inferBatchSourcePath(validatedPaths);
+      const batch = createBatch({
+        name: pickBatchName(inferredSourcePath, batchName),
+        sourcePath: inferredSourcePath,
+        kind: "folder",
+        options: batchOptions,
+      });
+      queueEvents.emit("event", { type: "batch-added", batch });
+
+      const jobs = validatedPaths.map((sourcePath) => {
         const autoStreamMap =
           chosenStreamSelection === "primary"
             ? pickPrimaryStreamMap(

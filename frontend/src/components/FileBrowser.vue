@@ -2,7 +2,12 @@
 import { ref, computed, onMounted } from "vue";
 import type { FsEntry } from "../types.ts";
 
-const emit = defineEmits<{ select: [path: string, entry: FsEntry] }>();
+const emit = defineEmits<{
+  select: [path: string, entry: FsEntry];
+  queueSelected: [paths: string[], basePath: string];
+}>();
+
+const BROWSE_PATH_STORAGE_KEY = "transcode-harbor.browse.currentPath";
 
 interface Crumb {
   label: string;
@@ -11,8 +16,15 @@ interface Crumb {
 
 const currentPath = ref("/");
 const entries = ref<FsEntry[]>([]);
+const selectedNames = ref<string[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
+
+const selectedPaths = computed(() => {
+  return selectedNames.value.map((name) =>
+    currentPath.value === "/" ? `/${name}` : `${currentPath.value}/${name}`,
+  );
+});
 
 const breadcrumbs = computed<Crumb[]>(() => {
   const parts = currentPath.value.split("/").filter(Boolean);
@@ -34,6 +46,14 @@ async function navigate(p: string): Promise<void> {
     const data = (await res.json()) as { path: string; entries: FsEntry[] };
     entries.value = data.entries;
     currentPath.value = data.path;
+    selectedNames.value = selectedNames.value.filter((name) =>
+      data.entries.some(
+        (entry) => entry.type === "file" && entry.name === name,
+      ),
+    );
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(BROWSE_PATH_STORAGE_KEY, data.path);
+    }
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to load";
   } finally {
@@ -63,6 +83,33 @@ function queueDirectory(entry: FsEntry): void {
   emit("select", dirPath, entry);
 }
 
+function toggleSelection(entry: FsEntry): void {
+  if (entry.type !== "file") return;
+  if (selectedNames.value.includes(entry.name)) {
+    selectedNames.value = selectedNames.value.filter(
+      (name) => name !== entry.name,
+    );
+    return;
+  }
+  selectedNames.value = [...selectedNames.value, entry.name];
+}
+
+function isSelected(entry: FsEntry): boolean {
+  return entry.type === "file" && selectedNames.value.includes(entry.name);
+}
+
+function queueSelectedFiles(): void {
+  if (!selectedPaths.value.length) return;
+  emit("queueSelected", [...selectedPaths.value], currentPath.value);
+}
+
+function restoreInitialPath(): string {
+  if (typeof window === "undefined") return "/";
+  const saved = window.localStorage.getItem(BROWSE_PATH_STORAGE_KEY);
+  if (!saved || typeof saved !== "string") return "/";
+  return saved.trim() || "/";
+}
+
 function formatSize(bytes?: number): string {
   if (!bytes) return "";
   if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
@@ -70,7 +117,7 @@ function formatSize(bytes?: number): string {
   return `${(bytes / 1024).toFixed(0)} KB`;
 }
 
-onMounted(() => navigate("/"));
+onMounted(() => navigate(restoreInitialPath()));
 </script>
 
 <template>
@@ -110,6 +157,19 @@ onMounted(() => navigate("/"));
     </div>
 
     <ul v-else class="m-0 grid list-none gap-1 p-0">
+      <li class="mb-1 flex items-center justify-between gap-3 px-1.5">
+        <span class="text-[0.78rem] text-[var(--text-dim)]">
+          {{ selectedPaths.length }} selected
+        </span>
+        <button
+          type="button"
+          class="rounded-full border border-[rgba(109,212,236,0.24)] bg-[rgba(109,212,236,0.12)] px-3 py-1.5 text-[0.72rem] font-bold uppercase tracking-[0.08em] text-[var(--accent)] disabled:opacity-45"
+          :disabled="selectedPaths.length < 1"
+          @click="queueSelectedFiles"
+        >
+          Queue Selected
+        </button>
+      </li>
       <li
         v-for="entry in entries"
         :key="entry.name"
@@ -117,6 +177,15 @@ onMounted(() => navigate("/"));
         :class="entry.type === 'directory' ? 'text-[var(--accent)]' : ''"
         @click="entry.type === 'directory' ? enterDir(entry.name) : pick(entry)"
       >
+        <input
+          v-if="entry.type === 'file'"
+          class="h-4 w-4 shrink-0 cursor-pointer accent-[var(--accent)]"
+          type="checkbox"
+          :checked="isSelected(entry)"
+          :aria-label="`Select ${entry.name}`"
+          @click.stop
+          @change="toggleSelection(entry)"
+        />
         <span class="shrink-0 text-[1.1em]">{{
           entry.type === "directory" ? "📁" : "🎬"
         }}</span>

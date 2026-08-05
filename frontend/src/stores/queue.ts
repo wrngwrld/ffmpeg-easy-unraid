@@ -146,6 +146,37 @@ export const useQueueStore = defineStore("queue", () => {
     return payload.queued ?? 0;
   }
 
+  async function submitFiles(
+    sourcePaths: string[],
+    qp: number,
+    encoder: EncoderChoice,
+    streamSelection: StreamSelection,
+    audioMode: AudioMode,
+    subtitleMode: SubtitleMode,
+    batchName?: string,
+    overwriteExisting?: boolean,
+  ): Promise<number> {
+    const res = await fetch("/api/transcode/files", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sourcePaths,
+        qp,
+        encoder,
+        streamSelection,
+        audioMode,
+        subtitleMode,
+        batchName,
+        overwriteExisting,
+      }),
+    });
+    if (!res.ok) {
+      await throwQueueError(res);
+    }
+    const payload = (await res.json()) as { queued?: number };
+    return payload.queued ?? 0;
+  }
+
   async function cancel(id: string): Promise<void> {
     await fetch(`/api/jobs/${id}`, { method: "DELETE" });
   }
@@ -208,6 +239,7 @@ export const useQueueStore = defineStore("queue", () => {
     completedJobs,
     submit,
     submitFolder,
+    submitFiles,
     cancel,
     pauseBatch,
     resumeBatch,

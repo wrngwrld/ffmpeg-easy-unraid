@@ -1,19 +1,23 @@
 <script setup lang="ts">
-import { ref, computed, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { QueueRequestError, useQueueStore } from "../stores/queue.ts";
 import { useStatusStore } from "../stores/status.ts";
 import type {
   AudioMode,
   EncoderChoice,
-  FsEntry,
-  MediaStreamInfo,
-  StreamMapSelection,
   StreamSelection,
   SubtitleMode,
 } from "../types.ts";
 
-const props = defineProps<{ path: string; entry: FsEntry }>();
-const emit = defineEmits<{ close: []; submitted: [] }>();
+const props = defineProps<{
+  paths: string[];
+  basePath: string;
+}>();
+
+const emit = defineEmits<{
+  close: [];
+  submitted: [queued: number];
+}>();
 
 const queue = useQueueStore();
 const status = useStatusStore();
@@ -23,16 +27,13 @@ const encoder = ref<EncoderChoice>(status.defaultTranscode.encoder);
 const streamSelection = ref<StreamSelection>(
   status.defaultTranscode.streamSelection,
 );
-const availableStreams = ref<MediaStreamInfo[]>([]);
-const streamsLoading = ref(false);
-const selectedVideoIndex = ref<number | null>(null);
-const selectedAudioIndex = ref<number | null>(null);
-const selectedSubtitleIndex = ref<number | null>(null);
 const audioMode = ref<AudioMode>(status.defaultTranscode.audioMode);
 const subtitleMode = ref<SubtitleMode>(status.defaultTranscode.subtitleMode);
+const batchName = ref("");
 const submitting = ref(false);
 const errorMsg = ref<string | null>(null);
 const successMsg = ref<string | null>(null);
+
 const overwritePromptOpen = ref(false);
 const overwritePromptText = ref("");
 const overwritePromptCount = ref(0);
@@ -43,21 +44,7 @@ const canVaapi = computed(() => status.availableEncoders.includes("vaapi"));
 const canVideoToolbox = computed(() =>
   status.availableEncoders.includes("videotoolbox"),
 );
-const isDirectory = computed(() => props.entry.type === "directory");
-const isPrimarySelection = computed(
-  () => streamSelection.value === "primary" && !isDirectory.value,
-);
-const batchName = ref("");
-
-const videoStreams = computed(() =>
-  availableStreams.value.filter((s) => s.codecType === "video"),
-);
-const audioStreams = computed(() =>
-  availableStreams.value.filter((s) => s.codecType === "audio"),
-);
-const subtitleStreams = computed(() =>
-  availableStreams.value.filter((s) => s.codecType === "subtitle"),
-);
+const pathSamples = computed(() => props.paths.slice(0, 6));
 
 watch(
   () => [status.availableEncoders, status.defaultTranscode] as const,
@@ -72,7 +59,6 @@ watch(
       encoder.value = preferred;
       return;
     }
-
     if (available.includes("vaapi")) {
       encoder.value = "vaapi";
       return;
@@ -86,90 +72,53 @@ watch(
   { immediate: true },
 );
 
-function formatSize(bytes?: number): string {
-  if (!bytes) return "";
-  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
-  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(2)} MB`;
-  return `${(bytes / 1024).toFixed(0)} KB`;
-}
-
-function streamLabel(s: MediaStreamInfo): string {
-  if (s.codecType === "video") {
-    const dim = s.width && s.height ? ` ${s.width}x${s.height}` : "";
-    return `#${s.index} ${s.codecName ?? "video"}${dim}`;
-  }
-  if (s.codecType === "audio") {
-    const ch = s.channels ? ` ${s.channels}ch` : "";
-    const lang = s.language ? ` ${s.language}` : "";
-    return `#${s.index} ${s.codecName ?? "audio"}${ch}${lang}`;
-  }
-  const lang = s.language ? ` ${s.language}` : "";
-  const title = s.title ? ` ${s.title}` : "";
-  return `#${s.index} ${s.codecName ?? "subtitle"}${lang}${title}`;
-}
-
-async function loadStreams(): Promise<void> {
-  if (isDirectory.value) {
-    availableStreams.value = [];
-    selectedVideoIndex.value = null;
-    selectedAudioIndex.value = null;
-    selectedSubtitleIndex.value = null;
-    return;
-  }
-
-  streamsLoading.value = true;
-  try {
-    const res = await fetch(
-      `/api/fs/streams?path=${encodeURIComponent(props.path)}`,
-    );
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = (await res.json()) as { streams?: MediaStreamInfo[] };
-    const streams = data.streams ?? [];
-    availableStreams.value = streams;
-
-    const firstVideo = streams.find((s) => s.codecType === "video");
-    const firstAudio = streams.find((s) => s.codecType === "audio");
-    const firstSubtitle = streams.find((s) => s.codecType === "subtitle");
-    selectedVideoIndex.value = firstVideo?.index ?? null;
-    selectedAudioIndex.value = firstAudio?.index ?? null;
-    selectedSubtitleIndex.value = firstSubtitle?.index ?? null;
-  } catch {
-    availableStreams.value = [];
-    selectedVideoIndex.value = null;
-    selectedAudioIndex.value = null;
-    selectedSubtitleIndex.value = null;
-  } finally {
-    streamsLoading.value = false;
-  }
-}
-
 watch(
-  () => props.path,
-  () => {
-    void loadStreams();
-    batchName.value = props.entry.name;
+  () => props.basePath,
+  (next) => {
+    batchName.value = `${next.replace(/^\//, "") || "root"} selection`;
   },
   { immediate: true },
 );
+
+async function askOverwriteConfirmation(
+  message: string,
+  existingCount: number,
+  examples: string[],
+): Promise<boolean> {
+  overwritePromptText.value = message;
+  overwritePromptCount.value = existingCount;
+  overwritePromptExamples.value = examples;
+  overwritePromptOpen.value = true;
+
+  return new Promise<boolean>((resolve) => {
+    overwritePromptResolver = resolve;
+  });
+}
+
+function confirmOverwritePrompt(): void {
+  overwritePromptOpen.value = false;
+  overwritePromptText.value = "";
+  overwritePromptCount.value = 0;
+  overwritePromptExamples.value = [];
+  overwritePromptResolver?.(true);
+  overwritePromptResolver = null;
+}
+
+function cancelOverwritePrompt(): void {
+  overwritePromptOpen.value = false;
+  overwritePromptText.value = "";
+  overwritePromptCount.value = 0;
+  overwritePromptExamples.value = [];
+  overwritePromptResolver?.(false);
+  overwritePromptResolver = null;
+}
 
 async function submit(): Promise<void> {
   submitting.value = true;
   errorMsg.value = null;
   successMsg.value = null;
+
   try {
-    const streamMap: StreamMapSelection | undefined = isPrimarySelection.value
-      ? {
-          videoIndex: selectedVideoIndex.value ?? undefined,
-          audioIndex: selectedAudioIndex.value,
-          subtitleIndex:
-            subtitleMode.value === "copy" ? selectedSubtitleIndex.value : null,
-        }
-      : undefined;
-
-    if (isPrimarySelection.value && selectedVideoIndex.value == null) {
-      throw new Error("Please select a video stream for primary mode.");
-    }
-
     const extractConflictCounts = (
       err: QueueRequestError,
     ): { existing: number; active: number } => {
@@ -199,52 +148,20 @@ async function submit(): Promise<void> {
         .filter((item) => item.reason === "exists")
         .map((item) => item.outputPath);
 
-      const unique = [...new Set(fromList)];
-      return unique.slice(0, 5);
+      return [...new Set(fromList)].slice(0, 6);
     };
 
-    const askOverwriteConfirmation = async (
-      message: string,
-      existingCount: number,
-      examples: string[],
-    ): Promise<boolean> => {
-      overwritePromptText.value = message;
-      overwritePromptCount.value = existingCount;
-      overwritePromptExamples.value = examples;
-      overwritePromptOpen.value = true;
-
-      return new Promise<boolean>((resolve) => {
-        overwritePromptResolver = resolve;
-      });
-    };
-
-    const runSubmit = async (overwriteExisting: boolean): Promise<number> => {
-      if (isDirectory.value) {
-        return queue.submitFolder(
-          props.path,
-          qp.value,
-          encoder.value,
-          streamSelection.value,
-          audioMode.value,
-          subtitleMode.value,
-          batchName.value.trim() || undefined,
-          overwriteExisting,
-        );
-      }
-
-      await queue.submit(
-        props.path,
+    const runSubmit = async (overwriteExisting: boolean): Promise<number> =>
+      queue.submitFiles(
+        props.paths,
         qp.value,
         encoder.value,
         streamSelection.value,
-        streamMap,
         audioMode.value,
         subtitleMode.value,
         batchName.value.trim() || undefined,
         overwriteExisting,
       );
-      return 1;
-    };
 
     let queued: number;
     try {
@@ -265,61 +182,31 @@ async function submit(): Promise<void> {
         throw err;
       }
 
-      const prompt = isDirectory.value
-        ? `${existing} output file${existing === 1 ? "" : "s"} already exist. Overwrite and queue this batch?`
-        : "Output file already exists. Overwrite and start transcode?";
-
       const ok = await askOverwriteConfirmation(
-        prompt,
+        `${existing} output file${existing === 1 ? "" : "s"} already exist. Overwrite and queue this selection?`,
         existing,
         extractExistingOutputs(err),
       );
-      if (!ok) {
-        return;
-      }
+      if (!ok) return;
 
       queued = await runSubmit(true);
     }
 
-    if (isDirectory.value) {
-      successMsg.value = `Queued ${queued} file${queued === 1 ? "" : "s"}.`;
-      emit("submitted");
-      emit("close");
-      return;
-    }
-
-    successMsg.value = "Queued 1 file.";
-    emit("submitted");
+    successMsg.value = `Queued ${queued} file${queued === 1 ? "" : "s"}.`;
+    emit("submitted", queued);
     emit("close");
-  } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : "Failed to queue job";
+  } catch (err) {
+    errorMsg.value =
+      err instanceof Error ? err.message : "Failed to queue selection";
   } finally {
     submitting.value = false;
   }
-}
-
-function confirmOverwritePrompt(): void {
-  overwritePromptOpen.value = false;
-  overwritePromptText.value = "";
-  overwritePromptCount.value = 0;
-  overwritePromptExamples.value = [];
-  overwritePromptResolver?.(true);
-  overwritePromptResolver = null;
-}
-
-function cancelOverwritePrompt(): void {
-  overwritePromptOpen.value = false;
-  overwritePromptText.value = "";
-  overwritePromptCount.value = 0;
-  overwritePromptExamples.value = [];
-  overwritePromptResolver?.(false);
-  overwritePromptResolver = null;
 }
 </script>
 
 <template>
   <div
-    class="fixed inset-0 z-[200] flex items-center justify-center overflow-y-auto bg-black/65 p-6 backdrop-blur-[6px]"
+    class="fixed inset-0 z-[220] flex items-center justify-center overflow-y-auto bg-black/65 p-6 backdrop-blur-[6px]"
     @click.self="$emit('close')"
   >
     <div
@@ -332,29 +219,25 @@ function cancelOverwritePrompt(): void {
           <span
             class="h-[7px] w-[7px] rounded-full bg-[var(--accent)] shadow-[0_0_18px_rgba(109,212,236,0.6)]"
           ></span
-          >Transcode
+          >Selection
         </div>
         <h2 class="m-0 text-[1.6rem] font-black tracking-[-0.04em]">
-          {{ isDirectory ? "Queue Folder" : "Configure Job" }}
+          Queue Selected Files
         </h2>
       </header>
 
       <div
-        class="mb-6 flex items-center gap-2.5 rounded-[14px] border border-white/10 bg-white/[0.04] px-4 py-3.5"
+        class="mb-6 rounded-[14px] border border-white/10 bg-white/[0.04] px-4 py-3.5"
       >
-        <span class="shrink-0 text-[1.1em]">{{
-          isDirectory ? "📁" : "🎬"
-        }}</span>
-        <span
-          class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-semibold"
-          :title="path"
-          >{{ entry.name }}</span
+        <p class="m-0 text-[0.86rem] text-[var(--text-muted)]">
+          {{ paths.length }} file{{ paths.length === 1 ? "" : "s" }} selected
+          from {{ basePath }}
+        </p>
+        <ul
+          class="mb-0 mt-2 list-disc space-y-1 pl-5 text-[0.8rem] text-[var(--text-dim)]"
         >
-        <span
-          v-if="entry.sizeBytes"
-          class="shrink-0 font-mono text-[0.82rem] text-[var(--text-dim)]"
-          >{{ formatSize(entry.sizeBytes) }}</span
-        >
+          <li v-for="sample in pathSamples" :key="sample">{{ sample }}</li>
+        </ul>
       </div>
 
       <div class="mb-[22px]">
@@ -367,7 +250,7 @@ function cancelOverwritePrompt(): void {
           v-model="batchName"
           type="text"
           class="w-full rounded-[14px] border border-white/10 bg-white/[0.04] px-4 py-3 text-[0.9rem] text-[var(--text)] outline-none focus:border-[rgba(109,212,236,0.35)]"
-          :placeholder="isDirectory ? 'Folder batch' : 'Single-file batch'"
+          placeholder="Selection batch"
         />
       </div>
 
@@ -379,11 +262,11 @@ function cancelOverwritePrompt(): void {
         </label>
         <div class="flex items-center gap-3.5">
           <input
+            v-model.number="qp"
             type="range"
             min="0"
             max="51"
             step="1"
-            v-model.number="qp"
             class="h-2 flex-1 cursor-pointer accent-[var(--accent)]"
           />
           <span class="min-w-[2.5ch] font-mono text-[1.2rem] font-bold">{{
@@ -396,70 +279,6 @@ function cancelOverwritePrompt(): void {
           <span>0 — lossless</span><span>22 — default</span
           ><span>51 — worst</span>
         </div>
-      </div>
-
-      <div v-if="isPrimarySelection" class="mb-[22px] grid gap-3">
-        <p class="m-0 text-[0.8rem] text-[var(--text-dim)]">
-          Select exact streams to keep for this file.
-        </p>
-
-        <div
-          v-if="streamsLoading"
-          class="text-[0.84rem] text-[var(--text-muted)]"
-        >
-          Loading available streams...
-        </div>
-
-        <template v-else>
-          <div class="grid gap-1.5">
-            <label class="text-[0.82rem] font-semibold text-[var(--text-muted)]"
-              >Video Stream</label
-            >
-            <select
-              v-model="selectedVideoIndex"
-              class="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[0.86rem] text-[var(--text)] outline-none"
-            >
-              <option :value="null" disabled>Select a video stream</option>
-              <option v-for="s in videoStreams" :key="s.index" :value="s.index">
-                {{ streamLabel(s) }}
-              </option>
-            </select>
-          </div>
-
-          <div class="grid gap-1.5">
-            <label class="text-[0.82rem] font-semibold text-[var(--text-muted)]"
-              >Audio Stream</label
-            >
-            <select
-              v-model="selectedAudioIndex"
-              class="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[0.86rem] text-[var(--text)] outline-none"
-            >
-              <option :value="null">No audio</option>
-              <option v-for="s in audioStreams" :key="s.index" :value="s.index">
-                {{ streamLabel(s) }}
-              </option>
-            </select>
-          </div>
-
-          <div v-if="subtitleMode === 'copy'" class="grid gap-1.5">
-            <label class="text-[0.82rem] font-semibold text-[var(--text-muted)]"
-              >Subtitle Stream</label
-            >
-            <select
-              v-model="selectedSubtitleIndex"
-              class="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[0.86rem] text-[var(--text)] outline-none"
-            >
-              <option :value="null">No subtitles</option>
-              <option
-                v-for="s in subtitleStreams"
-                :key="s.index"
-                :value="s.index"
-              >
-                {{ streamLabel(s) }}
-              </option>
-            </select>
-          </div>
-        </template>
       </div>
 
       <div class="mb-[22px]">
@@ -628,87 +447,76 @@ function cancelOverwritePrompt(): void {
 
       <footer class="mt-7 flex justify-end gap-3">
         <button
-          class="rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 font-extrabold text-[var(--text)] transition-transform hover:-translate-y-0.5 disabled:cursor-wait disabled:opacity-65"
           type="button"
+          class="rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 font-extrabold text-[var(--text)] transition-transform hover:-translate-y-0.5 disabled:cursor-wait disabled:opacity-65"
           @click="$emit('close')"
         >
           Cancel
         </button>
         <button
-          class="rounded-full bg-[linear-gradient(135deg,var(--accent)_0%,var(--accent-two)_100%)] px-[22px] py-[13px] font-extrabold text-[#08090d] shadow-[0_10px_30px_rgba(109,212,236,0.26)] transition-transform hover:-translate-y-0.5 disabled:cursor-wait disabled:opacity-65"
           type="button"
-          :disabled="submitting"
+          class="rounded-full bg-[linear-gradient(135deg,var(--accent)_0%,var(--accent-two)_100%)] px-[22px] py-[13px] font-extrabold text-[#08090d] shadow-[0_10px_30px_rgba(109,212,236,0.26)] transition-transform hover:-translate-y-0.5 disabled:cursor-wait disabled:opacity-65"
+          :disabled="submitting || !paths.length"
           @click="submit"
         >
-          {{
-            submitting
-              ? "Queuing…"
-              : isDirectory
-                ? "Queue Folder"
-                : "Start Transcode"
-          }}
+          {{ submitting ? "Queueing..." : "Queue Selection" }}
         </button>
       </footer>
 
       <div
         v-if="overwritePromptOpen"
-        class="absolute inset-0 z-10 flex items-center justify-center rounded-[28px] bg-black/70 p-5 backdrop-blur-[4px]"
+        class="absolute inset-0 z-30 flex items-center justify-center rounded-[28px] bg-black/50 p-4 backdrop-blur-[3px]"
+        @click.self="cancelOverwritePrompt"
       >
-        <div
-          class="w-full max-w-[460px] rounded-[20px] border border-white/12 bg-[rgba(11,15,22,0.96)] p-5 shadow-[var(--shadow-deep)]"
+        <section
+          class="w-[min(520px,100%)] rounded-[20px] border border-white/12 bg-[var(--glass-strong)] p-5 shadow-[var(--shadow-deep)]"
         >
           <p
-            class="m-0 text-[1rem] font-extrabold tracking-[-0.02em] text-[var(--text)]"
+            class="mb-2 inline-flex items-center gap-2 rounded-full border border-[rgba(242,125,145,0.26)] bg-[rgba(242,125,145,0.14)] px-3 py-1 text-[0.68rem] font-extrabold uppercase tracking-[0.14em] text-[var(--danger)]"
           >
-            Overwrite Existing Output
+            Overwrite Required
           </p>
-          <p class="mt-2 mb-0 text-[0.9rem] text-[var(--text-muted)]">
+          <h4 class="m-0 text-[1.02rem] font-extrabold tracking-[-0.02em]">
+            Existing Output Detected
+          </h4>
+          <p
+            class="mb-0 mt-2 text-[0.9rem] leading-relaxed text-[var(--text-muted)]"
+          >
             {{ overwritePromptText }}
           </p>
 
-          <div
+          <p class="mb-0 mt-3 text-[0.8rem] text-[var(--text-dim)]">
+            {{ overwritePromptCount }} file{{
+              overwritePromptCount === 1 ? "" : "s"
+            }}
+            affected
+          </p>
+          <ul
             v-if="overwritePromptExamples.length"
-            class="mt-3 rounded-[14px] border border-white/10 bg-white/[0.04] p-3"
+            class="mb-0 mt-2 max-h-28 list-disc space-y-1 overflow-auto pl-5 text-[0.78rem] text-[var(--text-dim)]"
           >
-            <p
-              class="m-0 text-[0.76rem] uppercase tracking-[0.12em] text-[var(--text-dim)]"
-            >
-              Sample output targets
-            </p>
-            <ul
-              class="mt-2 mb-0 list-disc pl-5 text-[0.82rem] text-[var(--text-muted)]"
-            >
-              <li v-for="item in overwritePromptExamples" :key="item">
-                {{ item }}
-              </li>
-            </ul>
-            <p
-              v-if="overwritePromptCount > overwritePromptExamples.length"
-              class="mt-2 mb-0 text-[0.78rem] text-[var(--text-dim)]"
-            >
-              and
-              {{ overwritePromptCount - overwritePromptExamples.length }}
-              more...
-            </p>
-          </div>
+            <li v-for="item in overwritePromptExamples" :key="item">
+              {{ item }}
+            </li>
+          </ul>
 
-          <div class="mt-4 flex justify-end gap-2.5">
+          <div class="mt-4 flex justify-end gap-2">
             <button
               type="button"
-              class="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[0.84rem] font-bold text-[var(--text)]"
+              class="rounded-full border border-white/12 bg-white/[0.05] px-3.5 py-2 text-[0.78rem] font-bold text-[var(--text)]"
               @click="cancelOverwritePrompt"
             >
               Cancel
             </button>
             <button
               type="button"
-              class="rounded-full border border-[rgba(242,125,145,0.25)] bg-[rgba(242,125,145,0.14)] px-4 py-2 text-[0.84rem] font-extrabold text-[var(--danger)]"
+              class="rounded-full border border-[rgba(242,125,145,0.3)] bg-[rgba(242,125,145,0.14)] px-3.5 py-2 text-[0.78rem] font-bold text-[var(--danger)]"
               @click="confirmOverwritePrompt"
             >
-              Overwrite & Continue
+              Overwrite And Queue
             </button>
           </div>
-        </div>
+        </section>
       </div>
     </div>
   </div>
